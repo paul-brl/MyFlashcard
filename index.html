@@ -20,7 +20,59 @@
   <script type="text/babel">
     const { useState, useEffect, useCallback, useMemo } = React;
 
-    // ─── Storage ────────────────────────────────────────────────────────────
+    // ─── Supabase ────────────────────────────────────────────────────────────
+    const SUPA_URL  = "https://cytdlgvtwvofwrgqnkhe.supabase.co";
+    const SUPA_KEY  = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN5dGRsZ3Z0d3ZvZndyZ3Fua2hlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkwMTU4MTIsImV4cCI6MjA5NDU5MTgxMn0.QLQrzrkAjDjEY1x0VJwMguteUYdcGJ_pREX03VElyOs";
+    const supaHeaders = { "Content-Type": "application/json", "apikey": SUPA_KEY, "Authorization": `Bearer ${SUPA_KEY}` };
+
+    const supa = {
+      // Cards
+      getCards: async () => {
+        try {
+          const r = await fetch(`${SUPA_URL}/rest/v1/cards?select=*`, { headers: supaHeaders });
+          const data = await r.json();
+          // Convert snake_case to camelCase
+          return data.map(c => ({ id: c.id, front: c.front, back: c.back, groupId: c.group_id, num: c.num, packetId: c.packet_id }));
+        } catch { return null; }
+      },
+      upsertCard: async (card) => {
+        try {
+          await fetch(`${SUPA_URL}/rest/v1/cards`, {
+            method: "POST",
+            headers: { ...supaHeaders, "Prefer": "resolution=merge-duplicates" },
+            body: JSON.stringify({ id: card.id, front: card.front, back: card.back, group_id: card.groupId, num: card.num, packet_id: card.packetId }),
+          });
+        } catch {}
+      },
+      deleteCard: async (id) => {
+        try {
+          await fetch(`${SUPA_URL}/rest/v1/cards?id=eq.${id}`, { method: "DELETE", headers: supaHeaders });
+        } catch {}
+      },
+      // Accounts
+      getAccounts: async () => {
+        try {
+          const r = await fetch(`${SUPA_URL}/rest/v1/accounts?select=*`, { headers: supaHeaders });
+          return await r.json();
+        } catch { return []; }
+      },
+      upsertAccount: async (acc) => {
+        try {
+          await fetch(`${SUPA_URL}/rest/v1/accounts`, {
+            method: "POST",
+            headers: { ...supaHeaders, "Prefer": "resolution=merge-duplicates" },
+            body: JSON.stringify({ username: acc.username, password: acc.password, email: acc.email || "", plan_id: acc.planId, groups: acc.groups }),
+          });
+        } catch {}
+      },
+      deleteAccount: async (username) => {
+        try {
+          await fetch(`${SUPA_URL}/rest/v1/accounts?username=eq.${username}`, { method: "DELETE", headers: supaHeaders });
+        } catch {}
+      },
+    };
+
+    // ─── Local storage (session, settings, progress uniquement) ─────────────
     const storage = {
       get:  (k) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch { return null; } },
       set:  (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
@@ -519,48 +571,117 @@
     function App(){
       const [view,setView]=useState("loading"),[currentUser,setCurrentUser]=useState(null),[cards,setCards]=useState([]),[prog,setProg]=useState({}),[settings,setSettings]=useState(DEFAULT_SETTINGS),[accounts,setAccounts]=useState([]),[studyCtx,setStudyCtx]=useState(null);
 
+      // Chargement initial depuis Supabase
       useEffect(()=>{
-        const saved=storage.get("mx6-session"),savedSet=storage.get("mx6-settings"),savedAcc=storage.get("mx6-accounts"),savedCards=storage.get("mx6-cards");
-        setAccounts(savedAcc||[]);setCards(savedCards||INITIAL_CARDS);if(!savedCards)storage.set("mx6-cards",INITIAL_CARDS);
-        if(savedSet)setSettings({...DEFAULT_SETTINGS,...savedSet});
-        if(saved){const userProg=storage.get(`mx6-prog-${saved.username}`)||{};setProg(userProg);setCurrentUser(saved);setView("dashboard");}else setView("login");
+        async function init(){
+          const savedSet=storage.get("mx6-settings");
+          if(savedSet) setSettings({...DEFAULT_SETTINGS,...savedSet});
+
+          // Charger les cartes depuis Supabase
+          const remoteCards = await supa.getCards();
+          if(remoteCards && remoteCards.length>0){
+            setCards(remoteCards);
+          } else {
+            // Première utilisation : pousser les cartes initiales vers Supabase
+            for(const c of INITIAL_CARDS){ await supa.upsertCard(c); }
+            setCards(INITIAL_CARDS);
+          }
+
+          // Charger les comptes depuis Supabase
+          const remoteAccounts = await supa.getAccounts();
+          setAccounts(remoteAccounts||[]);
+
+          // Session locale
+          const saved=storage.get("mx6-session");
+          if(saved){
+            const userProg=storage.get(`mx6-prog-${saved.username}`)||{};
+            setProg(userProg); setCurrentUser(saved); setView("dashboard");
+          } else { setView("login"); }
+        }
+        init();
       },[]);
 
       const handleLogin=(username,password)=>{
-        if(username===ADMIN_USERNAME&&password===ADMIN_PASSWORD){const u={username:ADMIN_USERNAME,role:"admin",plan:{planId:"both",groups:ALL}};const p=storage.get(`mx6-prog-${username}`)||{};setProg(p);setCurrentUser(u);storage.set("mx6-session",u);setView("dashboard");return true;}
-        const accs=storage.get("mx6-accounts")||[],acc=accs.find(a=>a.username===username&&a.password===password);
-        if(acc){const u={username:acc.username,role:"student",plan:{planId:acc.planId,groups:acc.groups}};const p=storage.get(`mx6-prog-${username}`)||{};setProg(p);setCurrentUser(u);storage.set("mx6-session",u);setView("dashboard");return true;}
+        if(username===ADMIN_USERNAME&&password===ADMIN_PASSWORD){
+          const u={username:ADMIN_USERNAME,role:"admin",plan:{planId:"both",groups:ALL}};
+          const p=storage.get(`mx6-prog-${username}`)||{};
+          setProg(p);setCurrentUser(u);storage.set("mx6-session",u);setView("dashboard");return true;
+        }
+        const acc=accounts.find(a=>a.username===username&&a.password===password);
+        if(acc){
+          const u={username:acc.username,role:"student",plan:{planId:acc.plan_id||acc.planId,groups:acc.groups||[]}};
+          const p=storage.get(`mx6-prog-${username}`)||{};
+          setProg(p);setCurrentUser(u);storage.set("mx6-session",u);setView("dashboard");return true;
+        }
         return false;
       };
+
       const logout=()=>{storage.del("mx6-session");setCurrentUser(null);setProg({});setView("login");};
-      const saveCards=useCallback(c=>{setCards(c);storage.set("mx6-cards",c);},[]);
       const saveProg=useCallback(p=>{setProg(p);if(currentUser)storage.set(`mx6-prog-${currentUser.username}`,p);},[currentUser]);
       const saveSet=useCallback(s=>{setSettings(s);storage.set("mx6-settings",s);},[]);
-      const saveAccounts=useCallback(a=>{setAccounts(a);storage.set("mx6-accounts",a);},[]);
-      const handleSaveCard=useCallback(cd=>{const u=cards.find(c=>c.id===cd.id)?cards.map(c=>c.id===cd.id?cd:c):[...cards,cd];saveCards(u);},[cards,saveCards]);
-      const handleDeleteCard=useCallback(id=>{saveCards(cards.filter(c=>c.id!==id));},[cards,saveCards]);
-      const handleSaveUser=useCallback(acc=>{const ex=accounts.find(a=>a.username===acc.username);saveAccounts(ex?accounts.map(a=>a.username===acc.username?acc:a):[...accounts,acc]);},[accounts,saveAccounts]);
-      const handleDeleteUser=useCallback(u=>{saveAccounts(accounts.filter(a=>a.username!==u));},[accounts,saveAccounts]);
-      const startStudy=useCallback((gid,num,pkId)=>{const list=filterCards(cards,gid,num,pkId);const queue=buildQueue(list,prog,settings);if(!queue.length){alert("Aucune carte à réviser !");return;}const grpLabel=GROUPS.find(g=>g.id===gid)?.label,pktLabel=PACKETS.find(p=>p.id===pkId)?.label;setStudyCtx({label:`${grpLabel} · Cours ${num} · ${pktLabel}`,queue});setView("study");},[cards,prog,settings]);
-      const startGlobalStudy=useCallback(pkId=>{const ids=currentUser?.plan?.groups||[];const el=cards.filter(c=>ids.includes(c.groupId)&&(!pkId||c.packetId===pkId));const queue=buildQueue(el,prog,settings);if(!queue.length){alert("Aucune carte à réviser !");return;}setStudyCtx({label:pkId?`Révision globale · ${PACKETS.find(p=>p.id===pkId)?.label}`:"Révision globale · Toutes les cartes",queue});setView("study");},[cards,prog,currentUser,settings]);
-      const handleRate=useCallback(async(card,rating)=>{const np=computeNext(prog[card.id],rating,settings);saveProg({...prog,[card.id]:np});return np;},[prog,saveProg,settings]);
 
-      const handleRegister=useCallback(newAcc=>{
-        // After register, auto-login the new student
-        const u={username:newAcc.username,role:"student",plan:{planId:newAcc.planId,groups:newAcc.groups}};
-        setProg({});setCurrentUser(u);storage.set("mx6-session",u);
-        // Refresh accounts list
-        const accs=storage.get("mx6-accounts")||[];setAccounts(accs);
+      // Cartes → Supabase (partagé avec tous)
+      const handleSaveCard=useCallback(async cd=>{
+        await supa.upsertCard(cd);
+        setCards(prev=>prev.find(c=>c.id===cd.id)?prev.map(c=>c.id===cd.id?cd:c):[...prev,cd]);
+      },[]);
+      const handleDeleteCard=useCallback(async id=>{
+        await supa.deleteCard(id);
+        setCards(prev=>prev.filter(c=>c.id!==id));
       },[]);
 
-      if(view==="loading")return <div style={{fontFamily:font,background:C.bg,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center"}}><p style={{color:C.textLt}}>Chargement…</p></div>;
-      if(view==="landing")return <Landing onBack={()=>setView("login")} onRegister={()=>setView("register")}/>;
-      if(view==="login") return <LoginView onLogin={handleLogin} onShowLanding={()=>setView("landing")} onRegister={()=>setView("register")}/>;
-      if(view==="register")return <RegisterView onRegister={acc=>{handleRegister(acc);setView("dashboard");}} onBack={()=>setView("login")}/>;
-      if(view==="dashboard"&&currentUser)return <Dashboard currentUser={currentUser} cards={cards} progress={prog} settings={settings} onStudy={startStudy} onGlobalStudy={startGlobalStudy} onAdmin={()=>setView("admin")} onSettings={()=>setView("settings")} onLogout={logout}/>;
-      if(view==="study"&&studyCtx)return <StudyView label={studyCtx.label} queue={studyCtx.queue} onRate={handleRate} onBack={()=>setView("dashboard")} settings={settings} isAdmin={currentUser?.role==="admin"}/>;
-      if(view==="admin")return <AdminView cards={cards} accounts={accounts} onSaveCard={handleSaveCard} onDeleteCard={handleDeleteCard} onSaveUser={handleSaveUser} onDeleteUser={handleDeleteUser} onBack={()=>setView("dashboard")}/>;
-      if(view==="settings")return <SettingsView settings={settings} onSave={saveSet} onBack={()=>setView("dashboard")}/>;
+      // Comptes → Supabase (partagé avec tous)
+      const handleSaveUser=useCallback(async acc=>{
+        await supa.upsertAccount(acc);
+        setAccounts(prev=>prev.find(a=>a.username===acc.username)?prev.map(a=>a.username===acc.username?{...a,...acc,plan_id:acc.planId}:a):[...prev,{...acc,plan_id:acc.planId}]);
+      },[]);
+      const handleDeleteUser=useCallback(async username=>{
+        await supa.deleteAccount(username);
+        setAccounts(prev=>prev.filter(a=>a.username!==username));
+      },[]);
+
+      const handleRegister=useCallback(async newAcc=>{
+        await supa.upsertAccount(newAcc);
+        setAccounts(prev=>[...prev,{...newAcc,plan_id:newAcc.planId}]);
+        const u={username:newAcc.username,role:"student",plan:{planId:newAcc.planId,groups:newAcc.groups}};
+        setProg({});setCurrentUser(u);storage.set("mx6-session",u);
+      },[]);
+
+      const startStudy=useCallback((gid,num,pkId)=>{
+        const list=filterCards(cards,gid,num,pkId);
+        const queue=buildQueue(list,prog,settings);
+        if(!queue.length){alert("Aucune carte à réviser !");return;}
+        const grpLabel=GROUPS.find(g=>g.id===gid)?.label,pktLabel=PACKETS.find(p=>p.id===pkId)?.label;
+        setStudyCtx({label:`${grpLabel} · Cours ${num} · ${pktLabel}`,queue});setView("study");
+      },[cards,prog,settings]);
+
+      const startGlobalStudy=useCallback(pkId=>{
+        const ids=currentUser?.plan?.groups||[];
+        const el=cards.filter(c=>ids.includes(c.groupId)&&(!pkId||c.packetId===pkId));
+        const queue=buildQueue(el,prog,settings);
+        if(!queue.length){alert("Aucune carte à réviser !");return;}
+        setStudyCtx({label:pkId?`Révision globale · ${PACKETS.find(p=>p.id===pkId)?.label}`:"Révision globale · Toutes les cartes",queue});
+        setView("study");
+      },[cards,prog,currentUser,settings]);
+
+      const handleRate=useCallback(async(card,rating)=>{
+        const np=computeNext(prog[card.id],rating,settings);
+        saveProg({...prog,[card.id]:np});return np;
+      },[prog,saveProg,settings]);
+
+      if(view==="loading")return(
+        <div style={{fontFamily:font,background:C.bg,minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16}}>
+          <p style={{fontFamily:serif,fontSize:28,letterSpacing:-0.5}}>Memorix</p>
+          <p style={{color:C.textLt,fontSize:13}}>Chargement des données…</p>
+        </div>
+      );
+      if(view==="landing")  return <Landing onBack={()=>setView("login")} onRegister={()=>setView("register")}/>;
+      if(view==="login")    return <LoginView onLogin={handleLogin} onShowLanding={()=>setView("landing")} onRegister={()=>setView("register")}/>;
+      if(view==="register") return <RegisterView onRegister={acc=>{handleRegister(acc);setView("dashboard");}} onBack={()=>setView("login")}/>;
+      if(view==="dashboard"&&currentUser) return <Dashboard currentUser={currentUser} cards={cards} progress={prog} settings={settings} onStudy={startStudy} onGlobalStudy={startGlobalStudy} onAdmin={()=>setView("admin")} onSettings={()=>setView("settings")} onLogout={logout}/>;
+      if(view==="study"&&studyCtx) return <StudyView label={studyCtx.label} queue={studyCtx.queue} onRate={handleRate} onBack={()=>setView("dashboard")} settings={settings} isAdmin={currentUser?.role==="admin"}/>;
+      if(view==="admin") return <AdminView cards={cards} accounts={accounts} onSaveCard={handleSaveCard} onDeleteCard={handleDeleteCard} onSaveUser={handleSaveUser} onDeleteUser={handleDeleteUser} onBack={()=>setView("dashboard")}/>;
+      if(view==="settings") return <SettingsView settings={settings} onSave={saveSet} onBack={()=>setView("dashboard")}/>;
       return null;
     }
 
