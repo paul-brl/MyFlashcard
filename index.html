@@ -405,29 +405,119 @@
       </div>;
     }
 
+    // ─── UpgradeModal ─────────────────────────────────────────────────────────
+    function UpgradeModal({currentPlanId, onClose}){
+      const ADMIN_EMAIL="votre-email@exemple.com"; // ← remplace par ton email
+      const [copied,setCopied]=useState(false);
+      const mainPlans=PLANS.slice(0,4);
+      const copy=()=>{navigator.clipboard?.writeText(ADMIN_EMAIL);setCopied(true);setTimeout(()=>setCopied(false),2000);};
+      return <Modal onClose={onClose} width={480}>
+        <p style={{fontFamily:serif,fontSize:22,margin:"0 0 4px"}}>Changer d'abonnement</p>
+        <p style={{fontSize:13,color:C.textMed,margin:"0 0 24px"}}>Ton abonnement actuel : <strong>{PLANS.find(p=>p.id===currentPlanId)?.label||"Pré-rentrée"}</strong></p>
+
+        <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:24}}>
+          {mainPlans.map(plan=>{
+            const isCurrent=plan.id===currentPlanId;
+            const isFree=plan.price==="Gratuit";
+            return <div key={plan.id} style={{border:`1.5px solid ${isCurrent?C.accent:C.border}`,borderRadius:10,padding:"14px 18px",background:isCurrent?C.accentBg:C.surface,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                  <p style={{fontFamily:serif,fontSize:15,margin:0,color:isCurrent?C.accent:C.text}}>{plan.label}</p>
+                  {isCurrent&&<Tag color={C.accent} bg={C.accentBg} small>Actuel</Tag>}
+                </div>
+                <p style={{fontSize:11,color:C.textMed,margin:0}}>{plan.desc}</p>
+              </div>
+              <div style={{textAlign:"right",flexShrink:0,marginLeft:16}}>
+                <p style={{fontSize:20,fontWeight:300,margin:"0 0 6px",color:isFree?C.util:C.text}}>{plan.price}</p>
+                {!isCurrent&&(
+                  <span style={{fontFamily:font,fontSize:10,fontWeight:600,letterSpacing:1,textTransform:"uppercase",color:C.textLt}}>
+                    {isFree?"(actuel)":"→ Contacter l'admin"}
+                  </span>
+                )}
+              </div>
+            </div>;
+          })}
+        </div>
+
+        <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,padding:"16px"}}>
+          <p style={{fontSize:13,fontWeight:500,margin:"0 0 8px"}}>Comment upgrader ?</p>
+          <ol style={{fontSize:13,color:C.textMed,margin:"0 0 14px",paddingLeft:20,lineHeight:2}}>
+            <li>Contacte l'administrateur par email</li>
+            <li>Indique ton identifiant : <strong>@{""}</strong> et le plan souhaité</li>
+            <li>Après paiement, ton accès est activé sous 24h</li>
+          </ol>
+          <p style={{fontFamily:mono,fontSize:9,letterSpacing:2,textTransform:"uppercase",color:C.textLt,margin:"0 0 8px"}}>Email administrateur</p>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            <code style={{fontFamily:mono,fontSize:13,background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,padding:"8px 12px",flex:1}}>{ADMIN_EMAIL}</code>
+            <Btn small onClick={copy}>{copied?"✓ Copié":"Copier"}</Btn>
+          </div>
+        </div>
+
+        <div style={{marginTop:16,padding:"10px 14px",borderRadius:6,background:C.accentBg,border:`1px solid ${C.accent}30`}}>
+          <p style={{fontSize:11,color:C.accent,margin:0}}>💳 Le paiement en ligne direct sera disponible prochainement.</p>
+        </div>
+        <Btn full style={{marginTop:16}} onClick={onClose}>Fermer</Btn>
+      </Modal>;
+    }
+
     // ─── Dashboard ───────────────────────────────────────────────────────────
     function Dashboard({currentUser,cards,progress,settings,onStudy,onGlobalStudy,onAdmin,onSettings,onLogout}){
       const isAdmin=currentUser.role==="admin";
       const ids=currentUser.plan?.groups||[];
       const accessible=GROUPS.filter(g=>ids.includes(g.id));
       const sem1=accessible.filter(g=>g.sem===1),sem2=accessible.filter(g=>g.sem===2);
+      const [showUpgrade,setShowUpgrade]=useState(false);
       const gModes=[{id:"prioritaire",label:"Prioritaire",col:C.prio,bg:C.prioBg},{id:"important",label:"Important",col:C.imp,bg:C.impBg},{id:"utile",label:"Utile",col:C.util,bg:C.utilBg},{id:null,label:"Toutes",col:C.accent,bg:C.accentBg}];
+      const currentPlan=PLANS.find(p=>p.id===currentUser.plan?.planId);
+
       function PktBtn({gid,num,pk}){const {total,due}=packetStats(cards,progress,gid,num,pk.id);const col=pC(pk.id),bg=pB(pk.id),hasDue=due>0,upToDate=total>0&&!hasDue;return <button onClick={()=>total>0&&onStudy(gid,num,pk.id)} style={{fontFamily:font,fontSize:11,fontWeight:500,padding:"7px 12px",cursor:total>0?"pointer":"default",borderRadius:6,border:`1.5px solid ${hasDue?col:upToDate?C.border:"#e8e5e0"}`,background:hasDue?bg:C.surface,color:hasDue?col:upToDate?C.textLt:"#c0bbb5",display:"flex",flexDirection:"column",alignItems:"center",gap:3,minWidth:90}} onMouseEnter={e=>{if(total>0)e.currentTarget.style.borderColor=col;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=hasDue?col:upToDate?C.border:"#e8e5e0";}}><span>{pk.label}</span><span style={{fontSize:10,fontWeight:400}}>{total===0?"vide":hasDue?`${due} carte${due>1?"s":""}` :"✓ à jour"}</span></button>;}
       function GroupBlock({group}){return <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden",marginBottom:12}}><div style={{padding:"11px 18px",borderBottom:`1px solid ${C.border}`,background:C.bg}}><p style={{fontFamily:serif,fontSize:15,margin:0}}>{group.label}</p></div>{group.nums.map((n,i)=><div key={n} style={{display:"flex",alignItems:"center",padding:"10px 18px",gap:14,borderBottom:i<group.nums.length-1?`1px solid ${C.border}`:"none"}}><span style={{fontFamily:mono,fontSize:9,letterSpacing:2,color:C.textLt,minWidth:52,textTransform:"uppercase"}}>Cours {n}</span><div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{PACKETS.map(pk=><PktBtn key={pk.id} gid={group.id} num={n} pk={pk}/>)}</div></div>)}</div>;}
+
       return <div style={{fontFamily:font,background:C.bg,minHeight:"100vh",color:C.text}}>
-        <Nav left={<span style={{fontFamily:serif,fontSize:20}}>Memorix</span>} center="Tableau de bord" right={<><Btn small onClick={onSettings}>Paramètres</Btn>{isAdmin&&<Btn small onClick={onAdmin}>Admin</Btn>}<button onClick={onLogout} style={{fontFamily:font,fontSize:12,background:"none",border:"none",color:C.textLt,cursor:"pointer"}}>Déconnexion</button></>}/>
+        <Nav left={<span style={{fontFamily:serif,fontSize:20}}>Memorix</span>} center="Tableau de bord"
+          right={<><Btn small onClick={onSettings}>Paramètres</Btn>{isAdmin&&<Btn small onClick={onAdmin}>Admin</Btn>}<button onClick={onLogout} style={{fontFamily:font,fontSize:12,background:"none",border:"none",color:C.textLt,cursor:"pointer"}}>Déconnexion</button></>}/>
+
         <div style={{maxWidth:760,margin:"0 auto",padding:"28px 24px"}}>
-          <p style={{fontSize:13,color:C.textMed,margin:"0 0 20px"}}>Bonjour <strong style={{color:C.text}}>@{currentUser.username}</strong> ✦ {PLANS.find(p=>p.id===currentUser.plan?.planId)?.label||"Accès personnalisé"}</p>
+
+          {/* Bandeau abonnement étudiant */}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"14px 18px",marginBottom:20}}>
+            <div>
+              <p style={{fontSize:12,color:C.textLt,margin:"0 0 2px",fontFamily:mono,letterSpacing:1,textTransform:"uppercase"}}>Bonjour @{currentUser.username}</p>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <p style={{fontSize:15,margin:0,color:C.text}}>{currentPlan?.label||"Pré-rentrée"}</p>
+                <Tag color={currentPlan?.price==="Gratuit"?C.util:C.accent} bg={currentPlan?.price==="Gratuit"?C.utilBg:C.accentBg} small>{currentPlan?.price||"Gratuit"}</Tag>
+              </div>
+            </div>
+            {!isAdmin&&(
+              <button onClick={()=>setShowUpgrade(true)} style={{fontFamily:font,fontSize:12,fontWeight:600,padding:"8px 16px",cursor:"pointer",borderRadius:6,border:`1.5px solid ${C.accent}`,background:C.accentBg,color:C.accent}}>
+                ⬆ Changer d'abonnement
+              </button>
+            )}
+          </div>
+
+          {/* Révision globale */}
           <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"20px 22px",marginBottom:24}}>
             <p style={{fontFamily:serif,fontSize:18,margin:"0 0 3px"}}>Révision globale</p>
             <p style={{fontSize:12,color:C.textMed,margin:"0 0 16px"}}>Toutes vos matières en une session</p>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10}}>{gModes.map(mode=>{const count=globalDue(cards,progress,ids,settings,mode.id),hasCards=count>0;return <button key={String(mode.id)} onClick={()=>hasCards&&onGlobalStudy(mode.id)} style={{fontFamily:font,padding:"14px 10px",cursor:hasCards?"pointer":"default",borderRadius:8,border:`1.5px solid ${hasCards?mode.col:C.border}`,background:hasCards?mode.bg:"transparent",color:hasCards?mode.col:C.textLt,display:"flex",flexDirection:"column",alignItems:"center",gap:6}} onMouseEnter={e=>{if(hasCards)e.currentTarget.style.transform="translateY(-2px)";}} onMouseLeave={e=>{e.currentTarget.style.transform="none";}}><span style={{fontSize:11,fontWeight:600,textAlign:"center",lineHeight:1.3}}>{mode.label}</span><span style={{fontSize:18,fontWeight:300}}>{count}</span><span style={{fontSize:10,opacity:0.7}}>carte{count!==1?"s":""}</span></button>;})}</div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10}}>
+              {gModes.map(mode=>{const count=globalDue(cards,progress,ids,settings,mode.id),hasCards=count>0;return <button key={String(mode.id)} onClick={()=>hasCards&&onGlobalStudy(mode.id)} style={{fontFamily:font,padding:"14px 10px",cursor:hasCards?"pointer":"default",borderRadius:8,border:`1.5px solid ${hasCards?mode.col:C.border}`,background:hasCards?mode.bg:"transparent",color:hasCards?mode.col:C.textLt,display:"flex",flexDirection:"column",alignItems:"center",gap:6}} onMouseEnter={e=>{if(hasCards)e.currentTarget.style.transform="translateY(-2px)";}} onMouseLeave={e=>{e.currentTarget.style.transform="none";}}><span style={{fontSize:11,fontWeight:600,textAlign:"center",lineHeight:1.3}}>{mode.label}</span><span style={{fontSize:18,fontWeight:300}}>{count}</span><span style={{fontSize:10,opacity:0.7}}>carte{count!==1?"s":""}</span></button>;})}
+            </div>
           </div>
+
+          {/* Matières */}
           <p style={{fontFamily:serif,fontSize:18,margin:"0 0 14px"}}>Par matière et cours</p>
           {sem1.length>0&&<><p style={{fontFamily:mono,fontSize:9,letterSpacing:3,textTransform:"uppercase",color:C.textLt,margin:"0 0 12px"}}>— Semestre 1</p>{sem1.map(g=><GroupBlock key={g.id} group={g}/>)}</>}
           {sem2.length>0&&<><p style={{fontFamily:mono,fontSize:9,letterSpacing:3,textTransform:"uppercase",color:C.textLt,margin:"16px 0 12px"}}>— Semestre 2</p>{sem2.map(g=><GroupBlock key={g.id} group={g}/>)}</>}
-          {!sem1.length&&!sem2.length&&<div style={{border:`1.5px dashed ${C.border}`,borderRadius:10,padding:"40px 24px",textAlign:"center"}}><p style={{fontSize:14,color:C.textLt}}>Aucune matière dans votre abonnement.</p></div>}
+          {!sem1.length&&!sem2.length&&(
+            <div style={{border:`1.5px dashed ${C.border}`,borderRadius:10,padding:"40px 24px",textAlign:"center"}}>
+              <p style={{fontSize:16,margin:"0 0 8px"}}>📚</p>
+              <p style={{fontSize:14,color:C.textMed,margin:"0 0 16px"}}>Ton abonnement ne donne pas encore accès à des matières.</p>
+              {!isAdmin&&<button onClick={()=>setShowUpgrade(true)} style={{fontFamily:font,fontSize:13,fontWeight:600,padding:"10px 20px",cursor:"pointer",borderRadius:6,border:`1.5px solid ${C.accent}`,background:C.accentBg,color:C.accent}}>Voir les abonnements →</button>}
+            </div>
+          )}
         </div>
+
+        {showUpgrade&&<UpgradeModal currentPlanId={currentUser.plan?.planId} onClose={()=>setShowUpgrade(false)}/>}
       </div>;
     }
 
