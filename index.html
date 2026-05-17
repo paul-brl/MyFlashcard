@@ -142,7 +142,7 @@
     }
 
     // ─── Login ───────────────────────────────────────────────────────────────
-    function LoginView({onLogin,onShowLanding}){
+    function LoginView({onLogin,onShowLanding,onRegister}){
       const [username,setUsername]=useState(""),[password,setPassword]=useState(""),[error,setError]=useState(""),[loading,setLoading]=useState(false);
       const handleSubmit=()=>{if(!username.trim()||!password.trim()){setError("Veuillez remplir tous les champs.");return;}setLoading(true);setError("");setTimeout(()=>{const ok=onLogin(username.trim(),password);if(!ok)setError("Identifiant ou mot de passe incorrect.");setLoading(false);},400);};
       return <div style={{fontFamily:font,background:C.bg,minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:24}}>
@@ -159,8 +159,68 @@
             </div>
             {error&&<p style={{fontSize:12,color:C.again,margin:"14px 0 0",background:C.againBg,padding:"8px 12px",borderRadius:6}}>{error}</p>}
             <Btn fill full style={{marginTop:24,fontSize:14,padding:"12px"}} onClick={handleSubmit} disabled={loading}>{loading?"Connexion…":"Se connecter →"}</Btn>
+            <div style={{borderTop:`1px solid ${C.border}`,marginTop:24,paddingTop:20,textAlign:"center"}}>
+              <p style={{fontSize:13,color:C.textMed,margin:"0 0 12px"}}>Pas encore de compte ?</p>
+              <Btn full onClick={onRegister} style={{borderColor:C.util,color:C.util}}>Créer un compte gratuit →</Btn>
+            </div>
           </div>
           <button onClick={onShowLanding} style={{display:"block",margin:"20px auto 0",fontFamily:font,fontSize:13,background:"none",border:"none",color:C.textLt,cursor:"pointer",textDecoration:"underline"}}>Voir les offres et tarifs</button>
+        </div>
+      </div>;
+    }
+
+    // ─── Register ────────────────────────────────────────────────────────────
+    function RegisterView({onRegister,onBack}){
+      const [form,setForm]=useState({username:"",password:"",confirm:"",email:""});
+      const [error,setError]=useState(""),[done,setDone]=useState(false),[loading,setLoading]=useState(false);
+      const F=(k,label,ph,type="text")=><div><Lbl>{label}</Lbl><input style={iLine} type={type} placeholder={ph} value={form[k]} onChange={e=>setForm(p=>({...p,[k]:e.target.value}))}/></div>;
+      const handleSubmit=()=>{
+        const {username,password,confirm}=form;
+        if(!username.trim()||!password.trim()){setError("Identifiant et mot de passe requis.");return;}
+        if(username===ADMIN_USERNAME){setError("Ce nom d'utilisateur est réservé.");return;}
+        if(username.length<3){setError("L'identifiant doit contenir au moins 3 caractères.");return;}
+        if(password.length<6){setError("Le mot de passe doit contenir au moins 6 caractères.");return;}
+        if(password!==confirm){setError("Les mots de passe ne correspondent pas.");return;}
+        const accs=storage.get("mx6-accounts")||[];
+        if(accs.find(a=>a.username===username)){setError("Cet identifiant est déjà utilisé.");return;}
+        setLoading(true);
+        setTimeout(()=>{
+          const newAcc={username:username.trim(),password,email:form.email,planId:"prerentree",groups:[]};
+          const updated=[...accs,newAcc];
+          storage.set("mx6-accounts",updated);
+          onRegister(newAcc);
+          setDone(true);setLoading(false);
+        },500);
+      };
+      if(done)return <div style={{fontFamily:font,background:C.bg,minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:24}}>
+        <div style={{width:"100%",maxWidth:380,textAlign:"center"}}>
+          <p style={{fontSize:48,margin:"0 0 16px"}}>✓</p>
+          <p style={{fontFamily:serif,fontSize:24,margin:"0 0 8px"}}>Compte créé !</p>
+          <p style={{fontSize:14,color:C.textMed,margin:"0 0 8px",lineHeight:1.6}}>Bienvenue sur Memorix. Ton compte a accès à l'offre <strong>Pré-rentrée</strong>.</p>
+          <p style={{fontSize:12,color:C.textLt,margin:"0 0 28px",lineHeight:1.6}}>Pour accéder aux semestres payants, contacte l'administrateur qui mettra à jour ton abonnement.</p>
+          <Btn fill full onClick={onBack}>Se connecter →</Btn>
+        </div>
+      </div>;
+      return <div style={{fontFamily:font,background:C.bg,minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:24}}>
+        <div style={{width:"100%",maxWidth:400}}>
+          <div style={{textAlign:"center",marginBottom:32}}>
+            <p style={{fontFamily:serif,fontSize:30,letterSpacing:-1,margin:"0 0 4px"}}>Memorix</p>
+            <p style={{fontFamily:mono,fontSize:9,letterSpacing:3,textTransform:"uppercase",color:C.textLt,margin:0}}>Créer un compte</p>
+          </div>
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"32px 28px",boxShadow:"0 4px 24px rgba(0,0,0,0.06)"}}>
+            <div style={{background:C.utilBg,border:`1px solid ${C.util}30`,borderRadius:8,padding:"10px 14px",marginBottom:22}}>
+              <p style={{fontSize:12,color:C.util,margin:0,lineHeight:1.6}}>✓ Accès gratuit à l'offre <strong>Pré-rentrée</strong> — l'administrateur pourra activer tes semestres une fois ton abonnement souscrit.</p>
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:18}}>
+              {F("username","Identifiant choisi","ex: marie.dupont")}
+              {F("email","Adresse e-mail (optionnel)","votre@email.com","email")}
+              {F("password","Mot de passe","6 caractères minimum","password")}
+              {F("confirm","Confirmer le mot de passe","••••••••","password")}
+            </div>
+            {error&&<p style={{fontSize:12,color:C.again,margin:"14px 0 0",background:C.againBg,padding:"8px 12px",borderRadius:6}}>{error}</p>}
+            <Btn fill full style={{marginTop:24,fontSize:14,padding:"12px"}} onClick={handleSubmit} disabled={loading}>{loading?"Création…":"Créer mon compte →"}</Btn>
+          </div>
+          <button onClick={onBack} style={{display:"block",margin:"20px auto 0",fontFamily:font,fontSize:13,background:"none",border:"none",color:C.textLt,cursor:"pointer",textDecoration:"underline"}}>Déjà un compte ? Se connecter</button>
         </div>
       </div>;
     }
@@ -396,19 +456,62 @@
     }
 
     // ─── Landing ─────────────────────────────────────────────────────────────
-    function Landing({onBack}){
-      const [tab,setTab]=useState("semester");
+    function Landing({onBack,onRegister}){
+      const [tab,setTab]=useState("semester"),[contactPlan,setContactPlan]=useState(null);
       const semPlans=PLANS.slice(0,4),grpPlans=PLANS.filter(p=>p.id.startsWith("g-")),display=tab==="semester"?semPlans:grpPlans;
+      const ADMIN_EMAIL="votre-email@exemple.com"; // ← Remplace par ton email
+
       return <div style={{fontFamily:font,background:C.bg,minHeight:"100vh",color:C.text}}>
-        <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"14px 32px",display:"flex",justifyContent:"space-between",alignItems:"center"}}><div style={{display:"flex",alignItems:"baseline",gap:12}}><span style={{fontFamily:serif,fontSize:22}}>Memorix</span><span style={{fontFamily:mono,fontSize:9,letterSpacing:2,color:C.textLt,textTransform:"uppercase"}}>Sciences du vivant</span></div><Btn fill onClick={onBack}>← Se connecter</Btn></div>
+        <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"14px 32px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div style={{display:"flex",alignItems:"baseline",gap:12}}><span style={{fontFamily:serif,fontSize:22}}>Memorix</span><span style={{fontFamily:mono,fontSize:9,letterSpacing:2,color:C.textLt,textTransform:"uppercase"}}>Sciences du vivant</span></div>
+          <div style={{display:"flex",gap:10}}><Btn onClick={onRegister} style={{borderColor:C.util,color:C.util}}>Créer un compte gratuit</Btn><Btn fill onClick={onBack}>Se connecter →</Btn></div>
+        </div>
+
         <div style={{maxWidth:760,margin:"0 auto",padding:"56px 32px 40px"}}>
           <p style={{fontFamily:serif,fontSize:36,fontWeight:400,letterSpacing:-1,margin:"0 0 16px",lineHeight:1.1}}>Flashcards médicales intelligentes</p>
           <p style={{fontSize:15,lineHeight:1.8,color:C.textMed,maxWidth:420,margin:"0 0 32px"}}>Répétition espacée SM-2, paquets Prioritaire · Important · Utile, révision globale ou par matière.</p>
-          <div style={{display:"flex",gap:8,marginBottom:20}}>{[["semester","Par semestre / année"],["subject","Par matière"]].map(([k,l])=><button key={k} onClick={()=>setTab(k)} style={{fontFamily:font,fontSize:13,fontWeight:500,padding:"7px 16px",cursor:"pointer",borderRadius:6,border:`1.5px solid ${tab===k?C.accent:C.border}`,background:tab===k?C.accentBg:"transparent",color:tab===k?C.accent:C.textMed}}>{l}</button>)}</div>
-          <div style={{display:"grid",gridTemplateColumns:tab==="semester"?"repeat(4,1fr)":"repeat(3,1fr)",gap:10}}>
-            {display.map(plan=>{const isFree=plan.price==="Gratuit";return <div key={plan.id} style={{background:C.surface,border:`1.5px solid ${isFree?C.util:C.border}`,borderRadius:10,padding:"20px 16px"}}>{isFree&&<Tag color={C.util} bg={C.utilBg} small>Offert</Tag>}<p style={{fontFamily:serif,fontSize:15,margin:isFree?"8px 0 6px":"0 0 6px"}}>{plan.label}</p><p style={{fontSize:11,color:C.textMed,margin:"0 0 16px",lineHeight:1.5}}>{plan.desc}</p><p style={{fontSize:isFree?18:24,fontWeight:300,margin:0,color:isFree?C.util:C.text}}>{plan.price}</p></div>;})}
+          <div style={{display:"flex",gap:8,marginBottom:20}}>
+            {[["semester","Par semestre / année"],["subject","Par matière"]].map(([k,l])=><button key={k} onClick={()=>setTab(k)} style={{fontFamily:font,fontSize:13,fontWeight:500,padding:"7px 16px",cursor:"pointer",borderRadius:6,border:`1.5px solid ${tab===k?C.accent:C.border}`,background:tab===k?C.accentBg:"transparent",color:tab===k?C.accent:C.textMed}}>{l}</button>)}
           </div>
+          <div style={{display:"grid",gridTemplateColumns:tab==="semester"?"repeat(4,1fr)":"repeat(3,1fr)",gap:10}}>
+            {display.map(plan=>{
+              const isFree=plan.price==="Gratuit";
+              return <div key={plan.id} style={{background:C.surface,border:`1.5px solid ${isFree?C.util:C.border}`,borderRadius:10,padding:"20px 16px",display:"flex",flexDirection:"column"}}>
+                {isFree&&<Tag color={C.util} bg={C.utilBg} small>Offert</Tag>}
+                <p style={{fontFamily:serif,fontSize:15,margin:isFree?"8px 0 6px":"0 0 6px"}}>{plan.label}</p>
+                <p style={{fontSize:11,color:C.textMed,margin:"0 0 12px",lineHeight:1.5,flex:1}}>{plan.desc}</p>
+                <p style={{fontSize:isFree?18:24,fontWeight:300,margin:"0 0 14px",color:isFree?C.util:C.text}}>{plan.price}</p>
+                {isFree
+                  ? <button onClick={onRegister} style={{fontFamily:font,fontSize:11,fontWeight:600,padding:"8px 12px",cursor:"pointer",borderRadius:6,border:`1.5px solid ${C.util}`,background:C.utilBg,color:C.util}}>Créer un compte →</button>
+                  : <button onClick={()=>setContactPlan(plan)} style={{fontFamily:font,fontSize:11,fontWeight:600,padding:"8px 12px",cursor:"pointer",borderRadius:6,border:`1.5px solid ${C.accent}`,background:C.accentBg,color:C.accent}}>Demander l'accès →</button>
+                }
+              </div>;
+            })}
+          </div>
+          <p style={{fontSize:12,color:C.textLt,margin:"20px 0 0",textAlign:"center"}}>Crée d'abord un compte gratuit — l'administrateur activera ton accès après souscription.</p>
         </div>
+
+        {contactPlan&&<Modal onClose={()=>setContactPlan(null)} width={420}>
+          <p style={{fontFamily:serif,fontSize:22,margin:"0 0 4px"}}>Demander l'accès</p>
+          <p style={{fontSize:14,color:C.textMed,margin:"0 0 24px"}}>{contactPlan.label} — {contactPlan.price}</p>
+          <div style={{background:C.accentBg,border:`1px solid ${C.accent}30`,borderRadius:8,padding:"16px",marginBottom:20}}>
+            <p style={{fontSize:13,color:C.textMed,margin:"0 0 8px",lineHeight:1.6}}>Pour accéder à cet abonnement :</p>
+            <ol style={{fontSize:13,color:C.textMed,margin:0,paddingLeft:20,lineHeight:2}}>
+              <li>Crée d'abord un <strong>compte gratuit</strong> sur cette page</li>
+              <li>Contacte l'administrateur pour régler l'abonnement</li>
+              <li>Ton accès sera activé sous 24h</li>
+            </ol>
+          </div>
+          <Lbl>Contact administrateur</Lbl>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginTop:8}}>
+            <code style={{fontFamily:mono,fontSize:13,background:C.bg,border:`1px solid ${C.border}`,borderRadius:6,padding:"8px 12px",flex:1}}>{ADMIN_EMAIL}</code>
+            <Btn small onClick={()=>{navigator.clipboard?.writeText(ADMIN_EMAIL);alert("Email copié !");}}>Copier</Btn>
+          </div>
+          <div style={{display:"flex",gap:10,marginTop:20}}>
+            <Btn fill full onClick={onRegister}>Créer mon compte gratuit →</Btn>
+            <Btn onClick={()=>setContactPlan(null)}>Fermer</Btn>
+          </div>
+        </Modal>}
       </div>;
     }
 
@@ -442,9 +545,18 @@
       const startGlobalStudy=useCallback(pkId=>{const ids=currentUser?.plan?.groups||[];const el=cards.filter(c=>ids.includes(c.groupId)&&(!pkId||c.packetId===pkId));const queue=buildQueue(el,prog,settings);if(!queue.length){alert("Aucune carte à réviser !");return;}setStudyCtx({label:pkId?`Révision globale · ${PACKETS.find(p=>p.id===pkId)?.label}`:"Révision globale · Toutes les cartes",queue});setView("study");},[cards,prog,currentUser,settings]);
       const handleRate=useCallback(async(card,rating)=>{const np=computeNext(prog[card.id],rating,settings);saveProg({...prog,[card.id]:np});return np;},[prog,saveProg,settings]);
 
+      const handleRegister=useCallback(newAcc=>{
+        // After register, auto-login the new student
+        const u={username:newAcc.username,role:"student",plan:{planId:newAcc.planId,groups:newAcc.groups}};
+        setProg({});setCurrentUser(u);storage.set("mx6-session",u);
+        // Refresh accounts list
+        const accs=storage.get("mx6-accounts")||[];setAccounts(accs);
+      },[]);
+
       if(view==="loading")return <div style={{fontFamily:font,background:C.bg,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center"}}><p style={{color:C.textLt}}>Chargement…</p></div>;
-      if(view==="landing")return <Landing onBack={()=>setView("login")}/>;
-      if(view==="login") return <LoginView onLogin={handleLogin} onShowLanding={()=>setView("landing")}/>;
+      if(view==="landing")return <Landing onBack={()=>setView("login")} onRegister={()=>setView("register")}/>;
+      if(view==="login") return <LoginView onLogin={handleLogin} onShowLanding={()=>setView("landing")} onRegister={()=>setView("register")}/>;
+      if(view==="register")return <RegisterView onRegister={acc=>{handleRegister(acc);setView("dashboard");}} onBack={()=>setView("login")}/>;
       if(view==="dashboard"&&currentUser)return <Dashboard currentUser={currentUser} cards={cards} progress={prog} settings={settings} onStudy={startStudy} onGlobalStudy={startGlobalStudy} onAdmin={()=>setView("admin")} onSettings={()=>setView("settings")} onLogout={logout}/>;
       if(view==="study"&&studyCtx)return <StudyView label={studyCtx.label} queue={studyCtx.queue} onRate={handleRate} onBack={()=>setView("dashboard")} settings={settings} isAdmin={currentUser?.role==="admin"}/>;
       if(view==="admin")return <AdminView cards={cards} accounts={accounts} onSaveCard={handleSaveCard} onDeleteCard={handleDeleteCard} onSaveUser={handleSaveUser} onDeleteUser={handleDeleteUser} onBack={()=>setView("dashboard")}/>;
