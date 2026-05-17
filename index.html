@@ -8,6 +8,7 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { background: #f5f3ee; }
     input[type=range] { accent-color: #2c4a7c; }
+    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
@@ -26,12 +27,10 @@
     const supaHeaders = { "Content-Type": "application/json", "apikey": SUPA_KEY, "Authorization": `Bearer ${SUPA_KEY}` };
 
     const supa = {
-      // Cards
       getCards: async () => {
         try {
           const r = await fetch(`${SUPA_URL}/rest/v1/cards?select=*`, { headers: supaHeaders });
           const data = await r.json();
-          // Convert snake_case to camelCase
           return data.map(c => ({ id: c.id, front: c.front, back: c.back, groupId: c.group_id, num: c.num, packetId: c.packet_id }));
         } catch { return null; }
       },
@@ -49,7 +48,6 @@
           await fetch(`${SUPA_URL}/rest/v1/cards?id=eq.${id}`, { method: "DELETE", headers: supaHeaders });
         } catch {}
       },
-      // Accounts
       getAccounts: async () => {
         try {
           const r = await fetch(`${SUPA_URL}/rest/v1/accounts?select=*`, { headers: supaHeaders });
@@ -72,12 +70,44 @@
       },
     };
 
-    // ─── Local storage (session, settings, progress uniquement) ─────────────
+    // ─── Local storage ───────────────────────────────────────────────────────
     const storage = {
       get:  (k) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch { return null; } },
       set:  (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
       del:  (k) => { try { localStorage.removeItem(k); } catch {} },
     };
+
+    // ─── Stripe Payment Links ────────────────────────────────────────────────
+    // Pour chaque plan, colle ici l'URL du Payment Link Stripe correspondant.
+    // Dans Stripe Dashboard → Produits → "Créer un payment link" → copier l'URL (https://buy.stripe.com/xxx)
+    // Pense aussi à régler l'URL de confirmation sur : https://TON-SITE.com/?payment=success
+    const STRIPE_PAYMENT_LINKS = {
+      "sem1":       "https://buy.stripe.com/5kQ7sN68i58ocCW0gDasg00",   // Semestre 1 — 99 €
+      "sem2":       "https://buy.stripe.com/3cI14p8gq30gauO1kHasg01",   // Semestre 2 — 149 €
+      "both":       "https://buy.stripe.com/5kQeVf0NY0S85au8N9asg02",   // Année complète — 200 €
+      "g-cell-bio": "https://buy.stripe.com/REMPLACE_MOI",   // Biologie cellulaire — 49 €
+      "g-histo":    "https://buy.stripe.com/REMPLACE_MOI",   // Histologie — 39 €
+      "g-biochem":  "https://buy.stripe.com/REMPLACE_MOI",   // Biochimie — 39 €
+      "g-biophys":  "https://buy.stripe.com/REMPLACE_MOI",   // Biophysique — 19 €
+      "g-biostat":  "https://buy.stripe.com/REMPLACE_MOI",   // Biostatistique — 9 €
+      "g-anatomie": "https://buy.stripe.com/REMPLACE_MOI",   // Anatomie — 49 €
+      "g-physio":   "https://buy.stripe.com/REMPLACE_MOI",   // Physiologie — 49 €
+      "g-medic":    "https://buy.stripe.com/REMPLACE_MOI",   // Intro. médicament — 39 €
+      "g-ssh":      "https://buy.stripe.com/REMPLACE_MOI",   // Sciences sociales — 29 €
+    };
+
+    // Redirige vers la page de paiement Stripe.
+    // Le username et planId sont encodés dans client_reference_id → récupérés par le webhook.
+    function redirectToStripe(planId, username) {
+      const baseUrl = STRIPE_PAYMENT_LINKS[planId];
+      if (!baseUrl || baseUrl.includes("REMPLACE_MOI")) {
+        alert("Le paiement en ligne n'est pas encore configuré pour ce plan. Contacte l'administrateur.");
+        return false;
+      }
+      const ref = encodeURIComponent(`${username}|${planId}`);
+      window.location.href = `${baseUrl}?client_reference_id=${ref}`;
+      return true;
+    }
 
     // ─── Constants ──────────────────────────────────────────────────────────
     const GROUPS = [
@@ -105,7 +135,7 @@
       { id: "sem2",       label: "Semestre 2",     price: "149 €",  groups: SEM2, desc: "Toutes les matières du semestre 2" },
       { id: "both",       label: "Année complète", price: "200 €",  groups: ALL,  desc: "Tous les semestres · Accès illimité" },
       { id: "prerentree", label: "Pré-rentrée",    price: "Gratuit",groups: [],   desc: "Matières de pré-rentrée · Accès offert" },
-      { id: "g-cell-bio", label: "Biologie cellulaire",   price: "49 €", groups: ["cell-bio"], desc: "Cours 1, 2 et 3" },
+      { id: "g-cell-bio", label: "Biologie cellulaire",    price: "49 €", groups: ["cell-bio"], desc: "Cours 1, 2 et 3" },
       { id: "g-histo",    label: "Histologie & Bio. dév.", price: "39 €", groups: ["histo"],    desc: "Cours 1, 2 et 3" },
       { id: "g-biochem",  label: "Biochimie",              price: "39 €", groups: ["biochem"],  desc: "Cours 1, 2 et 3" },
       { id: "g-biophys",  label: "Biophysique",            price: "19 €", groups: ["biophys"],  desc: "Cours 1, 2 et 3" },
@@ -183,6 +213,29 @@
     function Lbl({children,color}){return <p style={{fontFamily:mono,fontSize:9,letterSpacing:2.5,textTransform:"uppercase",color:color||C.textLt,margin:"0 0 6px"}}>{children}</p>;}
     function Nav({left,center,right}){return <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"12px 24px",display:"flex",justifyContent:"space-between",alignItems:"center",position:"sticky",top:0,zIndex:10}}><div>{left}</div><div style={{fontFamily:mono,fontSize:10,letterSpacing:2,textTransform:"uppercase",color:C.textLt}}>{center}</div><div style={{display:"flex",gap:8,alignItems:"center"}}>{right}</div></div>;}
 
+    // ─── Payment Banner ──────────────────────────────────────────────────────
+    function PaymentBanner({status, onClose}) {
+      if (!status) return null;
+      const ok = status === "success";
+      return (
+        <div style={{
+          position:"fixed", top:0, left:0, right:0, zIndex:200,
+          background: ok ? C.goodBg : C.againBg,
+          borderBottom: `2px solid ${ok ? C.good : C.again}`,
+          padding:"16px 24px",
+          display:"flex", justifyContent:"space-between", alignItems:"center",
+          boxShadow:"0 2px 16px rgba(0,0,0,0.1)"
+        }}>
+          <p style={{fontSize:14, color: ok ? C.good : C.again, margin:0, fontWeight:600}}>
+            {ok
+              ? "✓ Paiement confirmé ! Ton abonnement est en cours d'activation (peut prendre quelques secondes)."
+              : "✕ Paiement annulé — tu peux réessayer depuis ton espace."}
+          </p>
+          <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color: ok ? C.good : C.again,fontSize:20,lineHeight:1,marginLeft:16}}>×</button>
+        </div>
+      );
+    }
+
     function MultiToggle({label,options,value,onChange,colorFn}){
       const isAll=value.length===0,toggle=v=>onChange(value.includes(v)?value.filter(x=>x!==v):[...value,v]);
       const TBtn=({active,onClick,label:lbl,color,bg})=><button onClick={onClick} style={{fontFamily:font,fontSize:12,fontWeight:active?600:400,padding:"7px 14px",cursor:"pointer",borderRadius:6,border:`1.5px solid ${active?(color||C.accent):C.border}`,background:active?(bg||C.accentBg):"transparent",color:active?(color||C.accent):C.textMed,display:"flex",alignItems:"center",gap:5}}>{active&&<span style={{fontSize:10}}>✓</span>}{lbl}</button>;
@@ -233,13 +286,9 @@
         if(username.length<3){setError("L'identifiant doit contenir au moins 3 caractères.");return;}
         if(password.length<6){setError("Le mot de passe doit contenir au moins 6 caractères.");return;}
         if(password!==confirm){setError("Les mots de passe ne correspondent pas.");return;}
-        const accs=storage.get("mx6-accounts")||[];
-        if(accs.find(a=>a.username===username)){setError("Cet identifiant est déjà utilisé.");return;}
         setLoading(true);
         setTimeout(()=>{
           const newAcc={username:username.trim(),password,email:form.email,planId:"prerentree",groups:[]};
-          const updated=[...accs,newAcc];
-          storage.set("mx6-accounts",updated);
           onRegister(newAcc);
           setDone(true);setLoading(false);
         },500);
@@ -249,7 +298,7 @@
           <p style={{fontSize:48,margin:"0 0 16px"}}>✓</p>
           <p style={{fontFamily:serif,fontSize:24,margin:"0 0 8px"}}>Compte créé !</p>
           <p style={{fontSize:14,color:C.textMed,margin:"0 0 8px",lineHeight:1.6}}>Bienvenue sur Memorix. Ton compte a accès à l'offre <strong>Pré-rentrée</strong>.</p>
-          <p style={{fontSize:12,color:C.textLt,margin:"0 0 28px",lineHeight:1.6}}>Pour accéder aux semestres payants, contacte l'administrateur qui mettra à jour ton abonnement.</p>
+          <p style={{fontSize:12,color:C.textLt,margin:"0 0 28px",lineHeight:1.6}}>Pour accéder aux semestres payants, utilise le bouton <strong>« 💳 Changer d'abonnement »</strong> depuis ton tableau de bord.</p>
           <Btn fill full onClick={onBack}>Se connecter →</Btn>
         </div>
       </div>;
@@ -261,7 +310,7 @@
           </div>
           <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"32px 28px",boxShadow:"0 4px 24px rgba(0,0,0,0.06)"}}>
             <div style={{background:C.utilBg,border:`1px solid ${C.util}30`,borderRadius:8,padding:"10px 14px",marginBottom:22}}>
-              <p style={{fontSize:12,color:C.util,margin:0,lineHeight:1.6}}>✓ Accès gratuit à l'offre <strong>Pré-rentrée</strong> — l'administrateur pourra activer tes semestres une fois ton abonnement souscrit.</p>
+              <p style={{fontSize:12,color:C.util,margin:0,lineHeight:1.6}}>✓ Accès gratuit à l'offre <strong>Pré-rentrée</strong> — tu pourras payer directement depuis ton espace.</p>
             </div>
             <div style={{display:"flex",flexDirection:"column",gap:18}}>
               {F("username","Identifiant choisi","ex: marie.dupont")}
@@ -354,7 +403,7 @@
     function AdminUsers({accounts,onSave,onDelete}){
       const [editor,setEditor]=useState(null),[form,setForm]=useState({username:"",password:"",planId:"sem1"}),[err,setErr]=useState(""),[delUser,setDelUser]=useState(null);
       const openNew=()=>{setEditor("new");setForm({username:"",password:"",planId:"sem1"});setErr("");};
-      const openEdit=a=>{setEditor(a.username);setForm({username:a.username,password:a.password,planId:a.planId});setErr("");};
+      const openEdit=a=>{setEditor(a.username);setForm({username:a.username,password:a.password,planId:a.plan_id||a.planId});setErr("");};
       const handleSave=()=>{
         if(!form.username.trim()||!form.password.trim()){setErr("Identifiant et mot de passe requis.");return;}
         if(form.username===ADMIN_USERNAME){setErr("Ce nom est réservé.");return;}
@@ -368,20 +417,19 @@
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}><p style={{fontFamily:serif,fontSize:18,margin:0}}>Comptes étudiants</p><Btn fill onClick={openNew}>+ Nouvel étudiant</Btn></div>
         {accounts.length===0?(<div style={{border:`1.5px dashed ${C.border}`,borderRadius:10,padding:"48px 24px",textAlign:"center"}}><p style={{fontSize:14,color:C.textLt,margin:"0 0 16px"}}>Aucun étudiant inscrit.</p><Btn onClick={openNew}>Créer le premier compte →</Btn></div>):(
           <div style={{display:"flex",flexDirection:"column",gap:8}}>
-            {accounts.map(a=>{const plan=PLANS.find(p=>p.id===a.planId);return(
+            {accounts.map(a=>{const planId=a.plan_id||a.planId;const plan=PLANS.find(p=>p.id===planId);return(
               <div key={a.username} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <div><p style={{fontFamily:mono,fontSize:14,margin:"0 0 4px",color:C.text}}>@{a.username}</p><div style={{display:"flex",gap:6}}><Tag color={C.accent} bg={C.accentBg} small>{plan?.label||a.planId}</Tag><Tag color={C.textMed} bg={C.bg} small>{plan?.price||"—"}</Tag></div></div>
+                <div><p style={{fontFamily:mono,fontSize:14,margin:"0 0 4px",color:C.text}}>@{a.username}</p><div style={{display:"flex",gap:6}}><Tag color={C.accent} bg={C.accentBg} small>{plan?.label||planId}</Tag><Tag color={C.textMed} bg={C.bg} small>{plan?.price||"—"}</Tag></div></div>
                 <div style={{display:"flex",gap:8}}><Btn small onClick={()=>openEdit(a)}>Modifier</Btn><Btn small danger onClick={()=>setDelUser(a.username)}>Supprimer</Btn></div>
               </div>);
             })}
           </div>
         )}
-        <div style={{marginTop:16,padding:"12px 16px",borderRadius:8,background:C.accentBg,border:`1px solid ${C.accent}30`}}><p style={{fontSize:11,color:C.accent,margin:0,lineHeight:1.7}}>⚠ Les comptes sont stockés dans ce navigateur (localStorage). Pour un accès multi-appareils, un backend sera nécessaire.</p></div>
         {editor!==null&&<Modal onClose={()=>setEditor(null)} width={380}>
           <p style={{fontFamily:serif,fontSize:20,margin:"0 0 20px"}}>{editor==="new"?"Nouvel étudiant":"Modifier"}</p>
           <div style={{display:"flex",flexDirection:"column",gap:18}}>
             <div><Lbl>Identifiant</Lbl><input style={iLine} placeholder="ex: marie.dupont" value={form.username} onChange={e=>setForm(p=>({...p,username:e.target.value}))} disabled={editor!=="new"}/></div>
-            <div><Lbl>Mot de passe</Lbl><input style={iLine} type="text" placeholder="Mot de passe" value={form.password} onChange={e=>setForm(p=>({...p,password:e.target.value}))}/></div>
+            <div><Lbl>Mot de passe</Lbl><input style={iLine} type="text" value={form.password} onChange={e=>setForm(p=>({...p,password:e.target.value}))}/></div>
             <div><Lbl>Abonnement</Lbl><div style={{display:"flex",flexDirection:"column",gap:6,marginTop:8}}>{mainPlans.map(o=><button key={o.id} onClick={()=>setForm(p=>({...p,planId:o.id}))} style={{fontFamily:font,fontSize:13,padding:"10px 14px",cursor:"pointer",borderRadius:6,border:`1.5px solid ${form.planId===o.id?C.accent:C.border}`,background:form.planId===o.id?C.accentBg:"transparent",color:form.planId===o.id?C.accent:C.textMed,textAlign:"left"}}>{form.planId===o.id&&"✓ "}{o.label} — {o.price}</button>)}</div></div>
           </div>
           {err&&<p style={{fontSize:12,color:C.again,background:C.againBg,padding:"8px 12px",borderRadius:6,margin:"14px 0 0"}}>{err}</p>}
@@ -405,63 +453,91 @@
       </div>;
     }
 
-    // ─── UpgradeModal ─────────────────────────────────────────────────────────
-    function UpgradeModal({currentPlanId, onClose}){
-      const ADMIN_EMAIL="paul@bourel.fr"; // ← remplace par ton email
-      const [copied,setCopied]=useState(false);
-      const mainPlans=PLANS.slice(0,4);
-      const copy=()=>{navigator.clipboard?.writeText(ADMIN_EMAIL);setCopied(true);setTimeout(()=>setCopied(false),2000);};
-      return <Modal onClose={onClose} width={480}>
-        <p style={{fontFamily:serif,fontSize:22,margin:"0 0 4px"}}>Changer d'abonnement</p>
-        <p style={{fontSize:13,color:C.textMed,margin:"0 0 24px"}}>Ton abonnement actuel : <strong>{PLANS.find(p=>p.id===currentPlanId)?.label||"Pré-rentrée"}</strong></p>
+    // ─── UpgradeModal ────────────────────────────────────────────────────────
+    function UpgradeModal({currentPlanId, username, onClose}) {
+      const [redirectingTo, setRedirectingTo] = useState(null);
+      const mainPlans = PLANS.slice(0, 4);
 
-        <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:24}}>
-          {mainPlans.map(plan=>{
-            const isCurrent=plan.id===currentPlanId;
-            const isFree=plan.price==="Gratuit";
-            return <div key={plan.id} style={{border:`1.5px solid ${isCurrent?C.accent:C.border}`,borderRadius:10,padding:"14px 18px",background:isCurrent?C.accentBg:C.surface,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <div>
-                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
-                  <p style={{fontFamily:serif,fontSize:15,margin:0,color:isCurrent?C.accent:C.text}}>{plan.label}</p>
-                  {isCurrent&&<Tag color={C.accent} bg={C.accentBg} small>Actuel</Tag>}
+      const handlePay = (plan) => {
+        setRedirectingTo(plan.id);
+        // Petit délai pour que l'état "Redirection…" s'affiche avant la navigation
+        setTimeout(() => redirectToStripe(plan.id, username), 300);
+      };
+
+      return (
+        <Modal onClose={onClose} width={500}>
+          <p style={{fontFamily:serif,fontSize:22,margin:"0 0 4px"}}>Changer d'abonnement</p>
+          <p style={{fontSize:13,color:C.textMed,margin:"0 0 24px"}}>
+            Abonnement actuel : <strong>{PLANS.find(p=>p.id===currentPlanId)?.label||"Pré-rentrée"}</strong>
+          </p>
+
+          <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:24}}>
+            {mainPlans.map(plan => {
+              const isCurrent  = plan.id === currentPlanId;
+              const isFree     = plan.price === "Gratuit";
+              const isRedirect = redirectingTo === plan.id;
+              return (
+                <div key={plan.id} style={{
+                  border:`1.5px solid ${isCurrent ? C.accent : C.border}`,
+                  borderRadius:10, padding:"16px 20px",
+                  background:isCurrent ? C.accentBg : C.surface,
+                  display:"flex", justifyContent:"space-between", alignItems:"center",
+                  opacity: redirectingTo && !isRedirect ? 0.4 : 1,
+                  transition:"opacity 0.2s",
+                }}>
+                  <div>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                      <p style={{fontFamily:serif,fontSize:15,margin:0,color:isCurrent?C.accent:C.text}}>{plan.label}</p>
+                      {isCurrent && <Tag color={C.accent} bg={C.accentBg} small>Actuel</Tag>}
+                    </div>
+                    <p style={{fontSize:11,color:C.textMed,margin:0}}>{plan.desc}</p>
+                  </div>
+                  <div style={{textAlign:"right",flexShrink:0,marginLeft:20}}>
+                    <p style={{fontSize:22,fontWeight:300,margin:"0 0 8px",color:isFree?C.util:C.text}}>{plan.price}</p>
+                    {!isCurrent && !isFree && (
+                      <button
+                        onClick={() => handlePay(plan)}
+                        disabled={!!redirectingTo}
+                        style={{
+                          fontFamily:font, fontSize:12, fontWeight:600,
+                          padding:"9px 18px", cursor:redirectingTo?"wait":"pointer",
+                          borderRadius:6,
+                          border:`1.5px solid ${isRedirect ? C.accent : C.accent}`,
+                          background: isRedirect ? C.accent : C.accentBg,
+                          color: isRedirect ? "#fff" : C.accent,
+                          whiteSpace:"nowrap",
+                          display:"flex", alignItems:"center", gap:7,
+                          transition:"all 0.2s",
+                        }}
+                      >
+                        {isRedirect
+                          ? <><span style={{display:"inline-block",animation:"spin 0.8s linear infinite",fontSize:14}}>↻</span> Redirection…</>
+                          : <>💳 Payer {plan.price} →</>
+                        }
+                      </button>
+                    )}
+                    {isCurrent && <span style={{fontSize:11,color:C.accent,fontWeight:500}}>Plan actif ✓</span>}
+                    {!isCurrent && isFree && <span style={{fontSize:10,color:C.textLt,fontStyle:"italic"}}>Offert</span>}
+                  </div>
                 </div>
-                <p style={{fontSize:11,color:C.textMed,margin:0}}>{plan.desc}</p>
-              </div>
-              <div style={{textAlign:"right",flexShrink:0,marginLeft:16}}>
-                <p style={{fontSize:20,fontWeight:300,margin:"0 0 6px",color:isFree?C.util:C.text}}>{plan.price}</p>
-                {!isCurrent&&(
-                  <span style={{fontFamily:font,fontSize:10,fontWeight:600,letterSpacing:1,textTransform:"uppercase",color:C.textLt}}>
-                    {isFree?"(actuel)":"→ Contacter l'admin"}
-                  </span>
-                )}
-              </div>
-            </div>;
-          })}
-        </div>
-
-        <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,padding:"16px"}}>
-          <p style={{fontSize:13,fontWeight:500,margin:"0 0 8px"}}>Comment upgrader ?</p>
-          <ol style={{fontSize:13,color:C.textMed,margin:"0 0 14px",paddingLeft:20,lineHeight:2}}>
-            <li>Contacte l'administrateur par email</li>
-            <li>Indique ton identifiant : <strong>@{""}</strong> et le plan souhaité</li>
-            <li>Après paiement, ton accès est activé sous 24h</li>
-          </ol>
-          <p style={{fontFamily:mono,fontSize:9,letterSpacing:2,textTransform:"uppercase",color:C.textLt,margin:"0 0 8px"}}>Email administrateur</p>
-          <div style={{display:"flex",gap:8,alignItems:"center"}}>
-            <code style={{fontFamily:mono,fontSize:13,background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,padding:"8px 12px",flex:1}}>{ADMIN_EMAIL}</code>
-            <Btn small onClick={copy}>{copied?"✓ Copié":"Copier"}</Btn>
+              );
+            })}
           </div>
-        </div>
 
-        <div style={{marginTop:16,padding:"10px 14px",borderRadius:6,background:C.accentBg,border:`1px solid ${C.accent}30`}}>
-          <p style={{fontSize:11,color:C.accent,margin:0}}>💳 Le paiement en ligne direct sera disponible prochainement.</p>
-        </div>
-        <Btn full style={{marginTop:16}} onClick={onClose}>Fermer</Btn>
-      </Modal>;
+          <div style={{background:C.goodBg,border:`1px solid ${C.good}25`,borderRadius:8,padding:"12px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:10}}>
+            <span>🔒</span>
+            <p style={{fontSize:12,color:C.good,margin:0,lineHeight:1.5}}>
+              Paiement sécurisé par <strong>Stripe</strong> · Carte bancaire · Accès activé automatiquement
+            </p>
+          </div>
+
+          <Btn full onClick={onClose}>Fermer</Btn>
+        </Modal>
+      );
     }
 
     // ─── Dashboard ───────────────────────────────────────────────────────────
-    function Dashboard({currentUser,cards,progress,settings,onStudy,onGlobalStudy,onAdmin,onSettings,onLogout}){
+    function Dashboard({currentUser,cards,progress,settings,onStudy,onGlobalStudy,onAdmin,onSettings,onLogout,paymentStatus,onClosePaymentBanner}){
       const isAdmin=currentUser.role==="admin";
       const ids=currentUser.plan?.groups||[];
       const accessible=GROUPS.filter(g=>ids.includes(g.id));
@@ -473,13 +549,15 @@
       function PktBtn({gid,num,pk}){const {total,due}=packetStats(cards,progress,gid,num,pk.id);const col=pC(pk.id),bg=pB(pk.id),hasDue=due>0,upToDate=total>0&&!hasDue;return <button onClick={()=>total>0&&onStudy(gid,num,pk.id)} style={{fontFamily:font,fontSize:11,fontWeight:500,padding:"7px 12px",cursor:total>0?"pointer":"default",borderRadius:6,border:`1.5px solid ${hasDue?col:upToDate?C.border:"#e8e5e0"}`,background:hasDue?bg:C.surface,color:hasDue?col:upToDate?C.textLt:"#c0bbb5",display:"flex",flexDirection:"column",alignItems:"center",gap:3,minWidth:90}} onMouseEnter={e=>{if(total>0)e.currentTarget.style.borderColor=col;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=hasDue?col:upToDate?C.border:"#e8e5e0";}}><span>{pk.label}</span><span style={{fontSize:10,fontWeight:400}}>{total===0?"vide":hasDue?`${due} carte${due>1?"s":""}` :"✓ à jour"}</span></button>;}
       function GroupBlock({group}){return <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden",marginBottom:12}}><div style={{padding:"11px 18px",borderBottom:`1px solid ${C.border}`,background:C.bg}}><p style={{fontFamily:serif,fontSize:15,margin:0}}>{group.label}</p></div>{group.nums.map((n,i)=><div key={n} style={{display:"flex",alignItems:"center",padding:"10px 18px",gap:14,borderBottom:i<group.nums.length-1?`1px solid ${C.border}`:"none"}}><span style={{fontFamily:mono,fontSize:9,letterSpacing:2,color:C.textLt,minWidth:52,textTransform:"uppercase"}}>Cours {n}</span><div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{PACKETS.map(pk=><PktBtn key={pk.id} gid={group.id} num={n} pk={pk}/>)}</div></div>)}</div>;}
 
-      return <div style={{fontFamily:font,background:C.bg,minHeight:"100vh",color:C.text}}>
-        <Nav left={<span style={{fontFamily:serif,fontSize:20}}>Memorix</span>} center="Tableau de bord"
-          right={<><Btn small onClick={onSettings}>Paramètres</Btn>{isAdmin&&<Btn small onClick={onAdmin}>Admin</Btn>}<button onClick={onLogout} style={{fontFamily:font,fontSize:12,background:"none",border:"none",color:C.textLt,cursor:"pointer"}}>Déconnexion</button></>}/>
-
+      return <div style={{fontFamily:font,background:C.bg,minHeight:"100vh",color:C.text,paddingTop:paymentStatus?56:0}}>
+        <PaymentBanner status={paymentStatus} onClose={onClosePaymentBanner}/>
+        <Nav
+          left={<span style={{fontFamily:serif,fontSize:20}}>Memorix</span>}
+          center="Tableau de bord"
+          right={<><Btn small onClick={onSettings}>Paramètres</Btn>{isAdmin&&<Btn small onClick={onAdmin}>Admin</Btn>}<button onClick={onLogout} style={{fontFamily:font,fontSize:12,background:"none",border:"none",color:C.textLt,cursor:"pointer"}}>Déconnexion</button></>}
+        />
         <div style={{maxWidth:760,margin:"0 auto",padding:"28px 24px"}}>
-
-          {/* Bandeau abonnement étudiant */}
+          {/* Bandeau abonnement */}
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"14px 18px",marginBottom:20}}>
             <div>
               <p style={{fontSize:12,color:C.textLt,margin:"0 0 2px",fontFamily:mono,letterSpacing:1,textTransform:"uppercase"}}>Bonjour @{currentUser.username}</p>
@@ -489,8 +567,8 @@
               </div>
             </div>
             {!isAdmin&&(
-              <button onClick={()=>setShowUpgrade(true)} style={{fontFamily:font,fontSize:12,fontWeight:600,padding:"8px 16px",cursor:"pointer",borderRadius:6,border:`1.5px solid ${C.accent}`,background:C.accentBg,color:C.accent}}>
-                ⬆ Changer d'abonnement
+              <button onClick={()=>setShowUpgrade(true)} style={{fontFamily:font,fontSize:12,fontWeight:600,padding:"9px 18px",cursor:"pointer",borderRadius:6,border:`1.5px solid ${C.accent}`,background:C.accentBg,color:C.accent,display:"flex",alignItems:"center",gap:7}}>
+                💳 Changer d'abonnement
               </button>
             )}
           </div>
@@ -512,12 +590,11 @@
             <div style={{border:`1.5px dashed ${C.border}`,borderRadius:10,padding:"40px 24px",textAlign:"center"}}>
               <p style={{fontSize:16,margin:"0 0 8px"}}>📚</p>
               <p style={{fontSize:14,color:C.textMed,margin:"0 0 16px"}}>Ton abonnement ne donne pas encore accès à des matières.</p>
-              {!isAdmin&&<button onClick={()=>setShowUpgrade(true)} style={{fontFamily:font,fontSize:13,fontWeight:600,padding:"10px 20px",cursor:"pointer",borderRadius:6,border:`1.5px solid ${C.accent}`,background:C.accentBg,color:C.accent}}>Voir les abonnements →</button>}
+              {!isAdmin&&<button onClick={()=>setShowUpgrade(true)} style={{fontFamily:font,fontSize:13,fontWeight:600,padding:"10px 20px",cursor:"pointer",borderRadius:6,border:`1.5px solid ${C.accent}`,background:C.accentBg,color:C.accent}}>💳 Voir les abonnements →</button>}
             </div>
           )}
         </div>
-
-        {showUpgrade&&<UpgradeModal currentPlanId={currentUser.plan?.planId} onClose={()=>setShowUpgrade(false)}/>}
+        {showUpgrade&&<UpgradeModal currentPlanId={currentUser.plan?.planId} username={currentUser.username} onClose={()=>setShowUpgrade(false)}/>}
       </div>;
     }
 
@@ -572,7 +649,7 @@
         <Nav left={<button onClick={onBack} style={{fontFamily:font,fontSize:13,background:"none",border:"none",cursor:"pointer",color:C.textMed}}>← Retour</button>} center="Paramètres" right={<Btn fill onClick={save}>{saved?"✓ Sauvegardé":"Sauvegarder"}</Btn>}/>
         <div style={{maxWidth:600,margin:"0 auto",padding:"28px 24px"}}>
           <Sec title="🎯 Nouvelles cartes du jour">
-            <p style={{fontSize:13,color:C.textMed,margin:"0 0 14px",lineHeight:1.6}}>Choisissez quelles nouvelles cartes seront proposées aujourd'hui. Les révisions planifiées apparaissent toujours.</p>
+            <p style={{fontSize:13,color:C.textMed,margin:"0 0 14px",lineHeight:1.6}}>Choisissez quelles nouvelles cartes seront proposées aujourd'hui.</p>
             <div style={{display:"flex",flexDirection:"column",gap:10}}>
               <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"14px 16px"}}><MultiToggle label="Matières à découvrir" value={s.dailyGroups} onChange={v=>setS(p=>({...p,dailyGroups:v}))} options={GROUPS.map(g=>({value:g.id,label:g.label}))} colorFn={()=>C.accent}/></div>
               <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"14px 16px"}}><MultiToggle label="Paquets à découvrir" value={s.dailyPackets} onChange={v=>setS(p=>({...p,dailyPackets:v}))} options={PACKETS.map(pk=>({value:pk.id,label:pk.label}))} colorFn={pC}/></div>
@@ -598,20 +675,25 @@
     }
 
     // ─── Landing ─────────────────────────────────────────────────────────────
-    function Landing({onBack,onRegister}){
-      const [tab,setTab]=useState("semester"),[contactPlan,setContactPlan]=useState(null);
-      const semPlans=PLANS.slice(0,4),grpPlans=PLANS.filter(p=>p.id.startsWith("g-")),display=tab==="semester"?semPlans:grpPlans;
-      const ADMIN_EMAIL="paul@bourel.fr"; // ← Remplace par ton email
+    function Landing({onBack, onRegister}) {
+      const [tab, setTab] = useState("semester");
+      const [registerFirst, setRegisterFirst] = useState(null);
+      const semPlans = PLANS.slice(0, 4);
+      const grpPlans = PLANS.filter(p => p.id.startsWith("g-"));
+      const display  = tab === "semester" ? semPlans : grpPlans;
 
       return <div style={{fontFamily:font,background:C.bg,minHeight:"100vh",color:C.text}}>
         <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"14px 32px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <div style={{display:"flex",alignItems:"baseline",gap:12}}><span style={{fontFamily:serif,fontSize:22}}>Memorix</span><span style={{fontFamily:mono,fontSize:9,letterSpacing:2,color:C.textLt,textTransform:"uppercase"}}>Sciences du vivant</span></div>
           <div style={{display:"flex",gap:10}}><Btn onClick={onRegister} style={{borderColor:C.util,color:C.util}}>Créer un compte gratuit</Btn><Btn fill onClick={onBack}>Se connecter →</Btn></div>
         </div>
-
         <div style={{maxWidth:760,margin:"0 auto",padding:"56px 32px 40px"}}>
           <p style={{fontFamily:serif,fontSize:36,fontWeight:400,letterSpacing:-1,margin:"0 0 16px",lineHeight:1.1}}>Flashcards médicales intelligentes</p>
-          <p style={{fontSize:15,lineHeight:1.8,color:C.textMed,maxWidth:420,margin:"0 0 32px"}}>Répétition espacée SM-2, paquets Prioritaire · Important · Utile, révision globale ou par matière.</p>
+          <p style={{fontSize:15,lineHeight:1.8,color:C.textMed,maxWidth:420,margin:"0 0 12px"}}>Répétition espacée SM-2 · paquets Prioritaire, Important, Utile · révision globale ou par matière.</p>
+          <div style={{display:"inline-flex",alignItems:"center",gap:8,marginBottom:28,padding:"8px 14px",background:C.goodBg,border:`1px solid ${C.good}30`,borderRadius:6}}>
+            <span>🔒</span>
+            <p style={{fontSize:12,color:C.good,margin:0}}>Paiement sécurisé par <strong>Stripe</strong> · Accès activé instantanément</p>
+          </div>
           <div style={{display:"flex",gap:8,marginBottom:20}}>
             {[["semester","Par semestre / année"],["subject","Par matière"]].map(([k,l])=><button key={k} onClick={()=>setTab(k)} style={{fontFamily:font,fontSize:13,fontWeight:500,padding:"7px 16px",cursor:"pointer",borderRadius:6,border:`1.5px solid ${tab===k?C.accent:C.border}`,background:tab===k?C.accentBg:"transparent",color:tab===k?C.accent:C.textMed}}>{l}</button>)}
           </div>
@@ -625,153 +707,172 @@
                 <p style={{fontSize:isFree?18:24,fontWeight:300,margin:"0 0 14px",color:isFree?C.util:C.text}}>{plan.price}</p>
                 {isFree
                   ? <button onClick={onRegister} style={{fontFamily:font,fontSize:11,fontWeight:600,padding:"8px 12px",cursor:"pointer",borderRadius:6,border:`1.5px solid ${C.util}`,background:C.utilBg,color:C.util}}>Créer un compte →</button>
-                  : <button onClick={()=>setContactPlan(plan)} style={{fontFamily:font,fontSize:11,fontWeight:600,padding:"8px 12px",cursor:"pointer",borderRadius:6,border:`1.5px solid ${C.accent}`,background:C.accentBg,color:C.accent}}>Demander l'accès →</button>
+                  : <button onClick={()=>setRegisterFirst(plan)} style={{fontFamily:font,fontSize:11,fontWeight:600,padding:"8px 12px",cursor:"pointer",borderRadius:6,border:`1.5px solid ${C.accent}`,background:C.accentBg,color:C.accent}}>💳 Accéder →</button>
                 }
               </div>;
             })}
           </div>
-          <p style={{fontSize:12,color:C.textLt,margin:"20px 0 0",textAlign:"center"}}>Crée d'abord un compte gratuit — l'administrateur activera ton accès après souscription.</p>
+          <p style={{fontSize:12,color:C.textLt,margin:"20px 0 0",textAlign:"center"}}>Crée un compte gratuit, puis paie directement depuis ton espace en un clic.</p>
         </div>
 
-        {contactPlan&&<Modal onClose={()=>setContactPlan(null)} width={420}>
-          <p style={{fontFamily:serif,fontSize:22,margin:"0 0 4px"}}>Demander l'accès</p>
-          <p style={{fontSize:14,color:C.textMed,margin:"0 0 24px"}}>{contactPlan.label} — {contactPlan.price}</p>
-          <div style={{background:C.accentBg,border:`1px solid ${C.accent}30`,borderRadius:8,padding:"16px",marginBottom:20}}>
-            <p style={{fontSize:13,color:C.textMed,margin:"0 0 8px",lineHeight:1.6}}>Pour accéder à cet abonnement :</p>
-            <ol style={{fontSize:13,color:C.textMed,margin:0,paddingLeft:20,lineHeight:2}}>
-              <li>Crée d'abord un <strong>compte gratuit</strong> sur cette page</li>
-              <li>Contacte l'administrateur pour régler l'abonnement</li>
-              <li>Ton accès sera activé sous 24h</li>
+        {registerFirst&&<Modal onClose={()=>setRegisterFirst(null)} width={420}>
+          <p style={{fontFamily:serif,fontSize:22,margin:"0 0 4px"}}>Presque là !</p>
+          <p style={{fontSize:14,color:C.textMed,margin:"0 0 20px"}}>{registerFirst.label} — <strong>{registerFirst.price}</strong></p>
+          <div style={{background:C.accentBg,border:`1px solid ${C.accent}20`,borderRadius:8,padding:"16px",marginBottom:20}}>
+            <ol style={{fontSize:13,color:C.textMed,margin:0,paddingLeft:20,lineHeight:2.3}}>
+              <li>Crée un compte gratuit <strong>(30 sec)</strong></li>
+              <li>Depuis ton tableau de bord, clique <strong>« 💳 Changer d'abonnement »</strong></li>
+              <li>Clique <strong>Payer {registerFirst.price}</strong> → carte bancaire → terminé</li>
+              <li>Ton accès s'active <strong>instantanément</strong> ✓</li>
             </ol>
           </div>
-          <Lbl>Contact administrateur</Lbl>
-          <div style={{display:"flex",alignItems:"center",gap:10,marginTop:8}}>
-            <code style={{fontFamily:mono,fontSize:13,background:C.bg,border:`1px solid ${C.border}`,borderRadius:6,padding:"8px 12px",flex:1}}>{ADMIN_EMAIL}</code>
-            <Btn small onClick={()=>{navigator.clipboard?.writeText(ADMIN_EMAIL);alert("Email copié !");}}>Copier</Btn>
-          </div>
-          <div style={{display:"flex",gap:10,marginTop:20}}>
-            <Btn fill full onClick={onRegister}>Créer mon compte gratuit →</Btn>
-            <Btn onClick={()=>setContactPlan(null)}>Fermer</Btn>
-          </div>
+          <div style={{display:"flex",gap:10}}><Btn fill full onClick={onRegister}>Créer mon compte →</Btn><Btn onClick={()=>setRegisterFirst(null)}>Annuler</Btn></div>
         </Modal>}
       </div>;
     }
 
     // ─── App ─────────────────────────────────────────────────────────────────
-    function App(){
-      const [view,setView]=useState("loading"),[currentUser,setCurrentUser]=useState(null),[cards,setCards]=useState([]),[prog,setProg]=useState({}),[settings,setSettings]=useState(DEFAULT_SETTINGS),[accounts,setAccounts]=useState([]),[studyCtx,setStudyCtx]=useState(null);
+    function App() {
+      const [view, setView]               = useState("loading");
+      const [currentUser, setCurrentUser] = useState(null);
+      const [cards, setCards]             = useState([]);
+      const [prog, setProg]               = useState({});
+      const [settings, setSettings]       = useState(DEFAULT_SETTINGS);
+      const [accounts, setAccounts]       = useState([]);
+      const [studyCtx, setStudyCtx]       = useState(null);
+      const [paymentStatus, setPaymentStatus] = useState(null); // "success" | "cancel" | null
 
-      // Chargement initial depuis Supabase
-      useEffect(()=>{
-        async function init(){
-          const savedSet=storage.get("mx6-settings");
-          if(savedSet) setSettings({...DEFAULT_SETTINGS,...savedSet});
+      // Chargement initial
+      useEffect(() => {
+        async function init() {
+          const savedSet = storage.get("mx6-settings");
+          if (savedSet) setSettings({ ...DEFAULT_SETTINGS, ...savedSet });
 
-          // Charger les cartes depuis Supabase
           const remoteCards = await supa.getCards();
-          if(remoteCards && remoteCards.length>0){
+          if (remoteCards && remoteCards.length > 0) {
             setCards(remoteCards);
           } else {
-            // Première utilisation : pousser les cartes initiales vers Supabase
-            for(const c of INITIAL_CARDS){ await supa.upsertCard(c); }
+            for (const c of INITIAL_CARDS) { await supa.upsertCard(c); }
             setCards(INITIAL_CARDS);
           }
 
-          // Charger les comptes depuis Supabase
           const remoteAccounts = await supa.getAccounts();
-          setAccounts(remoteAccounts||[]);
+          setAccounts(remoteAccounts || []);
 
-          // Session locale
-          const saved=storage.get("mx6-session");
-          if(saved){
-            const userProg=storage.get(`mx6-prog-${saved.username}`)||{};
-            setProg(userProg); setCurrentUser(saved); setView("dashboard");
-          } else { setView("login"); }
+          const saved = storage.get("mx6-session");
+          if (saved) {
+            const userProg = storage.get(`mx6-prog-${saved.username}`) || {};
+            setProg(userProg);
+            setCurrentUser(saved);
+            setView("dashboard");
+          } else {
+            setView("login");
+          }
         }
         init();
-      },[]);
+      }, []);
 
-      const handleLogin=(username,password)=>{
-        if(username===ADMIN_USERNAME&&password===ADMIN_PASSWORD){
-          const u={username:ADMIN_USERNAME,role:"admin",plan:{planId:"both",groups:ALL}};
-          const p=storage.get(`mx6-prog-${username}`)||{};
-          setProg(p);setCurrentUser(u);storage.set("mx6-session",u);setView("dashboard");return true;
+      // Détection retour depuis Stripe (?payment=success ou ?payment=cancel)
+      useEffect(() => {
+        if (!currentUser) return;
+        const params  = new URLSearchParams(window.location.search);
+        const payment = params.get("payment");
+        if (!payment) return;
+
+        // Nettoyer l'URL sans rechargement
+        window.history.replaceState({}, "", window.location.pathname);
+        setPaymentStatus(payment);
+
+        if (payment === "success" && currentUser.role !== "admin") {
+          // Attendre 2s que le webhook Supabase ait mis à jour le compte, puis recharger
+          setTimeout(async () => {
+            const accs = await supa.getAccounts();
+            if (!accs) return;
+            setAccounts(accs);
+            const acc = accs.find(a => a.username === currentUser.username);
+            if (acc) {
+              const planId = acc.plan_id || acc.planId;
+              const plan   = PLANS.find(p => p.id === planId);
+              const newUser = { ...currentUser, plan: { planId, groups: acc.groups || plan?.groups || [] } };
+              setCurrentUser(newUser);
+              storage.set("mx6-session", newUser);
+            }
+          }, 2000);
         }
-        const acc=accounts.find(a=>a.username===username&&a.password===password);
-        if(acc){
-          const u={username:acc.username,role:"student",plan:{planId:acc.plan_id||acc.planId,groups:acc.groups||[]}};
-          const p=storage.get(`mx6-prog-${username}`)||{};
-          setProg(p);setCurrentUser(u);storage.set("mx6-session",u);setView("dashboard");return true;
+
+        const t = setTimeout(() => setPaymentStatus(null), 8000);
+        return () => clearTimeout(t);
+      }, [currentUser]);
+
+      const handleLogin = (username, password) => {
+        if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
+          const u = { username: ADMIN_USERNAME, role: "admin", plan: { planId: "both", groups: ALL } };
+          setProg(storage.get(`mx6-prog-${username}`) || {});
+          setCurrentUser(u); storage.set("mx6-session", u); setView("dashboard");
+          return true;
+        }
+        const acc = accounts.find(a => a.username === username && a.password === password);
+        if (acc) {
+          const planId = acc.plan_id || acc.planId;
+          const plan   = PLANS.find(p => p.id === planId);
+          const u = { username: acc.username, role: "student", plan: { planId, groups: acc.groups || plan?.groups || [] } };
+          setProg(storage.get(`mx6-prog-${username}`) || {});
+          setCurrentUser(u); storage.set("mx6-session", u); setView("dashboard");
+          return true;
         }
         return false;
       };
 
-      const logout=()=>{storage.del("mx6-session");setCurrentUser(null);setProg({});setView("login");};
-      const saveProg=useCallback(p=>{setProg(p);if(currentUser)storage.set(`mx6-prog-${currentUser.username}`,p);},[currentUser]);
-      const saveSet=useCallback(s=>{setSettings(s);storage.set("mx6-settings",s);},[]);
+      const logout    = () => { storage.del("mx6-session"); setCurrentUser(null); setProg({}); setView("login"); };
+      const saveProg  = useCallback(p => { setProg(p); if (currentUser) storage.set(`mx6-prog-${currentUser.username}`, p); }, [currentUser]);
+      const saveSet   = useCallback(s => { setSettings(s); storage.set("mx6-settings", s); }, []);
 
-      // Cartes → Supabase (partagé avec tous)
-      const handleSaveCard=useCallback(async cd=>{
-        await supa.upsertCard(cd);
-        setCards(prev=>prev.find(c=>c.id===cd.id)?prev.map(c=>c.id===cd.id?cd:c):[...prev,cd]);
-      },[]);
-      const handleDeleteCard=useCallback(async id=>{
-        await supa.deleteCard(id);
-        setCards(prev=>prev.filter(c=>c.id!==id));
-      },[]);
-
-      // Comptes → Supabase (partagé avec tous)
-      const handleSaveUser=useCallback(async acc=>{
-        await supa.upsertAccount(acc);
-        setAccounts(prev=>prev.find(a=>a.username===acc.username)?prev.map(a=>a.username===acc.username?{...a,...acc,plan_id:acc.planId}:a):[...prev,{...acc,plan_id:acc.planId}]);
-      },[]);
-      const handleDeleteUser=useCallback(async username=>{
-        await supa.deleteAccount(username);
-        setAccounts(prev=>prev.filter(a=>a.username!==username));
-      },[]);
-
-      const handleRegister=useCallback(async newAcc=>{
+      const handleSaveCard   = useCallback(async cd  => { await supa.upsertCard(cd); setCards(prev => prev.find(c => c.id === cd.id) ? prev.map(c => c.id === cd.id ? cd : c) : [...prev, cd]); }, []);
+      const handleDeleteCard = useCallback(async id  => { await supa.deleteCard(id); setCards(prev => prev.filter(c => c.id !== id)); }, []);
+      const handleSaveUser   = useCallback(async acc => { await supa.upsertAccount(acc); setAccounts(prev => prev.find(a => a.username === acc.username) ? prev.map(a => a.username === acc.username ? {...a,...acc,plan_id:acc.planId} : a) : [...prev,{...acc,plan_id:acc.planId}]); }, []);
+      const handleDeleteUser = useCallback(async username => { await supa.deleteAccount(username); setAccounts(prev => prev.filter(a => a.username !== username)); }, []);
+      const handleRegister   = useCallback(async newAcc => {
         await supa.upsertAccount(newAcc);
-        setAccounts(prev=>[...prev,{...newAcc,plan_id:newAcc.planId}]);
-        const u={username:newAcc.username,role:"student",plan:{planId:newAcc.planId,groups:newAcc.groups}};
-        setProg({});setCurrentUser(u);storage.set("mx6-session",u);
-      },[]);
+        setAccounts(prev => [...prev, {...newAcc, plan_id: newAcc.planId}]);
+        const u = { username: newAcc.username, role: "student", plan: { planId: newAcc.planId, groups: newAcc.groups } };
+        setProg({}); setCurrentUser(u); storage.set("mx6-session", u);
+      }, []);
 
-      const startStudy=useCallback((gid,num,pkId)=>{
-        const list=filterCards(cards,gid,num,pkId);
-        const queue=buildQueue(list,prog,settings);
-        if(!queue.length){alert("Aucune carte à réviser !");return;}
-        const grpLabel=GROUPS.find(g=>g.id===gid)?.label,pktLabel=PACKETS.find(p=>p.id===pkId)?.label;
-        setStudyCtx({label:`${grpLabel} · Cours ${num} · ${pktLabel}`,queue});setView("study");
-      },[cards,prog,settings]);
-
-      const startGlobalStudy=useCallback(pkId=>{
-        const ids=currentUser?.plan?.groups||[];
-        const el=cards.filter(c=>ids.includes(c.groupId)&&(!pkId||c.packetId===pkId));
-        const queue=buildQueue(el,prog,settings);
-        if(!queue.length){alert("Aucune carte à réviser !");return;}
-        setStudyCtx({label:pkId?`Révision globale · ${PACKETS.find(p=>p.id===pkId)?.label}`:"Révision globale · Toutes les cartes",queue});
+      const startStudy = useCallback((gid, num, pkId) => {
+        const queue = buildQueue(filterCards(cards, gid, num, pkId), prog, settings);
+        if (!queue.length) { alert("Aucune carte à réviser !"); return; }
+        setStudyCtx({ label: `${GROUPS.find(g=>g.id===gid)?.label} · Cours ${num} · ${PACKETS.find(p=>p.id===pkId)?.label}`, queue });
         setView("study");
-      },[cards,prog,currentUser,settings]);
+      }, [cards, prog, settings]);
 
-      const handleRate=useCallback(async(card,rating)=>{
-        const np=computeNext(prog[card.id],rating,settings);
-        saveProg({...prog,[card.id]:np});return np;
-      },[prog,saveProg,settings]);
+      const startGlobalStudy = useCallback(pkId => {
+        const ids   = currentUser?.plan?.groups || [];
+        const queue = buildQueue(cards.filter(c => ids.includes(c.groupId) && (!pkId || c.packetId === pkId)), prog, settings);
+        if (!queue.length) { alert("Aucune carte à réviser !"); return; }
+        setStudyCtx({ label: pkId ? `Révision globale · ${PACKETS.find(p=>p.id===pkId)?.label}` : "Révision globale · Toutes les cartes", queue });
+        setView("study");
+      }, [cards, prog, currentUser, settings]);
 
-      if(view==="loading")return(
+      const handleRate = useCallback(async (card, rating) => {
+        const np = computeNext(prog[card.id], rating, settings);
+        saveProg({ ...prog, [card.id]: np });
+        return np;
+      }, [prog, saveProg, settings]);
+
+      if (view === "loading") return (
         <div style={{fontFamily:font,background:C.bg,minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16}}>
           <p style={{fontFamily:serif,fontSize:28,letterSpacing:-0.5}}>Memorix</p>
           <p style={{color:C.textLt,fontSize:13}}>Chargement des données…</p>
         </div>
       );
-      if(view==="landing")  return <Landing onBack={()=>setView("login")} onRegister={()=>setView("register")}/>;
-      if(view==="login")    return <LoginView onLogin={handleLogin} onShowLanding={()=>setView("landing")} onRegister={()=>setView("register")}/>;
-      if(view==="register") return <RegisterView onRegister={acc=>{handleRegister(acc);setView("dashboard");}} onBack={()=>setView("login")}/>;
-      if(view==="dashboard"&&currentUser) return <Dashboard currentUser={currentUser} cards={cards} progress={prog} settings={settings} onStudy={startStudy} onGlobalStudy={startGlobalStudy} onAdmin={()=>setView("admin")} onSettings={()=>setView("settings")} onLogout={logout}/>;
-      if(view==="study"&&studyCtx) return <StudyView label={studyCtx.label} queue={studyCtx.queue} onRate={handleRate} onBack={()=>setView("dashboard")} settings={settings} isAdmin={currentUser?.role==="admin"}/>;
-      if(view==="admin") return <AdminView cards={cards} accounts={accounts} onSaveCard={handleSaveCard} onDeleteCard={handleDeleteCard} onSaveUser={handleSaveUser} onDeleteUser={handleDeleteUser} onBack={()=>setView("dashboard")}/>;
-      if(view==="settings") return <SettingsView settings={settings} onSave={saveSet} onBack={()=>setView("dashboard")}/>;
+
+      if (view === "landing")   return <Landing onBack={() => setView("login")} onRegister={() => setView("register")}/>;
+      if (view === "login")     return <LoginView onLogin={handleLogin} onShowLanding={() => setView("landing")} onRegister={() => setView("register")}/>;
+      if (view === "register")  return <RegisterView onRegister={acc => { handleRegister(acc); setView("dashboard"); }} onBack={() => setView("login")}/>;
+      if (view === "dashboard" && currentUser) return <Dashboard currentUser={currentUser} cards={cards} progress={prog} settings={settings} onStudy={startStudy} onGlobalStudy={startGlobalStudy} onAdmin={() => setView("admin")} onSettings={() => setView("settings")} onLogout={logout} paymentStatus={paymentStatus} onClosePaymentBanner={() => setPaymentStatus(null)}/>;
+      if (view === "study" && studyCtx) return <StudyView label={studyCtx.label} queue={studyCtx.queue} onRate={handleRate} onBack={() => setView("dashboard")} settings={settings} isAdmin={currentUser?.role === "admin"}/>;
+      if (view === "admin") return <AdminView cards={cards} accounts={accounts} onSaveCard={handleSaveCard} onDeleteCard={handleDeleteCard} onSaveUser={handleSaveUser} onDeleteUser={handleDeleteUser} onBack={() => setView("dashboard")}/>;
+      if (view === "settings") return <SettingsView settings={settings} onSave={saveSet} onBack={() => setView("dashboard")}/>;
       return null;
     }
 
