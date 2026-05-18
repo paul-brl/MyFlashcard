@@ -784,7 +784,10 @@
     // ─── Image Occlusion helpers ──────────────────────────────────────────────
     const isOcclusion = (card) => { try { return JSON.parse(card.front)?.type === "occlusion"; } catch { return false; } };
 
-    function OcclusionCanvas({cardFront, showBack}) {
+    // showBack=false, showOthers=false : TOUTES les zones masquées (comportement par défaut)
+    // showBack=false, showOthers=true  : seule la zone cible reste masquée, les autres sont révélées
+    // showBack=true                    : tout révélé, zone cible encadrée en vert
+    function OcclusionCanvas({cardFront, showBack, showOthers}) {
       const canvasRef = useRef(null);
       useEffect(() => {
         try {
@@ -798,32 +801,55 @@
             canvas.height = img.height;
             ctx.drawImage(img, 0, 0);
             const target = data.zones.find(z => z.id === data.targetZone);
-            if (!showBack) {
-              if (target) {
-                ctx.fillStyle = "#7a7672";
-                ctx.fillRect(target.x, target.y, target.w, target.h);
-                ctx.strokeStyle = "#4e4a46";
-                ctx.lineWidth = 2;
-                ctx.strokeRect(target.x, target.y, target.w, target.h);
-                ctx.fillStyle = "white";
-                const fs = Math.min(target.h * 0.5, 28);
-                ctx.font = `bold ${fs}px sans-serif`;
-                ctx.textAlign = "center";
-                ctx.textBaseline = "middle";
-                ctx.fillText("?", target.x + target.w/2, target.y + target.h/2);
-              }
-            } else {
+
+            if (showBack) {
+              // Recto verso : tout révélé, encadrer la zone cible en vert
               if (target) {
                 ctx.strokeStyle = "#15803d";
                 ctx.lineWidth = 3;
                 ctx.strokeRect(target.x - 1, target.y - 1, target.w + 2, target.h + 2);
+                // Légère teinte verte sur la zone révélée
+                ctx.fillStyle = "#15803d18";
+                ctx.fillRect(target.x, target.y, target.w, target.h);
               }
+            } else {
+              data.zones.forEach((z, i) => {
+                const isTarget = z.id === data.targetZone;
+                if (isTarget) {
+                  // Zone cible : toujours masquée avec un ?
+                  ctx.fillStyle = "#4e4a46";
+                  ctx.fillRect(z.x, z.y, z.w, z.h);
+                  ctx.strokeStyle = "#1a1917";
+                  ctx.lineWidth = 2;
+                  ctx.strokeRect(z.x, z.y, z.w, z.h);
+                  ctx.fillStyle = "white";
+                  const fs = Math.min(z.h * 0.5, 30);
+                  ctx.font = `bold ${fs}px sans-serif`;
+                  ctx.textAlign = "center";
+                  ctx.textBaseline = "middle";
+                  ctx.fillText("?", z.x + z.w/2, z.y + z.h/2);
+                } else if (!showOthers) {
+                  // Autres zones : masquées aussi (évite les indices), couleur distincte
+                  ctx.fillStyle = z.color + "cc";
+                  ctx.fillRect(z.x, z.y, z.w, z.h);
+                  ctx.strokeStyle = z.color;
+                  ctx.lineWidth = 1.5;
+                  ctx.strokeRect(z.x, z.y, z.w, z.h);
+                  // Numéro de zone
+                  ctx.fillStyle = "white";
+                  ctx.font = `bold ${Math.min(z.h*0.45, 18)}px sans-serif`;
+                  ctx.textAlign = "center";
+                  ctx.textBaseline = "middle";
+                  ctx.fillText(String(i+1), z.x + z.w/2, z.y + z.h/2);
+                }
+                // showOthers=true et !isTarget → on ne masque pas, l'image est visible
+              });
             }
           };
           img.src = data.image;
         } catch(e) { console.error("OcclusionCanvas error:", e); }
-      }, [cardFront, showBack]);
-      return <canvas ref={canvasRef} style={{maxWidth:"100%",maxHeight:280,borderRadius:8,display:"block",margin:"0 auto",cursor:"default"}}/>;
+      }, [cardFront, showBack, showOthers]);
+      return <canvas ref={canvasRef} style={{maxWidth:"100%",maxHeight:300,borderRadius:8,display:"block",margin:"0 auto",cursor:"default"}}/>;
     }
 
     // ─── Image Occlusion Editor ───────────────────────────────────────────────
@@ -985,14 +1011,14 @@
 
     // ─── Study ───────────────────────────────────────────────────────────────
     function StudyView({label,queue,onRate,onBack,settings,isAdmin}){
-      const [idx,setIdx]=useState(0),[showBack,setShowBack]=useState(false),[localQ,setLocalQ]=useState(queue),[done,setDone]=useState(false),[stats,setStats]=useState({correct:0,total:0});
+      const [idx,setIdx]=useState(0),[showBack,setShowBack]=useState(false),[showOthers,setShowOthers]=useState(false),[localQ,setLocalQ]=useState(queue),[done,setDone]=useState(false),[stats,setStats]=useState({correct:0,total:0});
       const card=localQ[idx];
       const handleRate=async rating=>{
         setStats(s=>({total:s.total+1,correct:s.correct+(rating>=3?1:0)}));
         const np=await onRate(card,rating);
         const q=[...localQ];
         if(np.state==="learning"||np.state==="relearning"){q.splice(idx,1);q.splice(Math.min(idx+4,q.length),0,card);}else q.splice(idx,1);
-        setLocalQ(q);if(!q.length||idx>=q.length){setDone(true);return;}setShowBack(false);
+        setLocalQ(q);if(!q.length||idx>=q.length){setDone(true);return;}setShowBack(false);setShowOthers(false);
       };
       if(done||!card)return <div style={{fontFamily:font,background:C.bg,minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:12}}><div style={{fontSize:52}}>✓</div><p style={{fontFamily:serif,fontSize:26,margin:0}}>Session terminée</p><p style={{fontSize:14,color:C.textMed}}>{stats.correct}/{stats.total} · {stats.total>0?Math.round((stats.correct/stats.total)*100):0}%</p><Btn fill style={{marginTop:20}} onClick={onBack}>← Tableau de bord</Btn></div>;
       const col=pC(card.packetId),grp=GROUPS.find(g=>g.id===card.groupId);
@@ -1007,12 +1033,42 @@
             <Tag color={C.textLt} bg={C.bg}>{stateLabel(null)}</Tag>
           </div>
           {isOcclusion(card) ? (
-            <div style={{background:C.surface,border:`1.5px solid ${showBack?col:C.border}`,borderRadius:12,padding:"20px",marginBottom:22,cursor:showBack?"default":"pointer",transition:"border-color 0.3s"}} onClick={()=>!showBack&&setShowBack(true)}>
-              <Lbl>{showBack?"Réponse — zone révélée":"Question — quelle est la zone masquée ?"}</Lbl>
-              <div style={{marginTop:10}}>
-                <OcclusionCanvas cardFront={card.front} showBack={showBack}/>
+            <div style={{marginBottom:22}}>
+              {/* Carte image occlusion */}
+              <div style={{background:C.surface,border:`1.5px solid ${showBack?col:C.border}`,borderRadius:12,padding:"16px 20px",transition:"border-color 0.3s"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                  <Lbl>{showBack?"Réponse — zone révélée":showOthers?"Contexte visible — zone cible masquée":"Toutes les zones masquées"}</Lbl>
+                  {showBack&&<Tag color={C.good} bg={C.goodBg} small>Révélé</Tag>}
+                </div>
+                <div onClick={()=>!showBack&&setShowBack(true)} style={{cursor:showBack?"default":"pointer"}}>
+                  <OcclusionCanvas cardFront={card.front} showBack={showBack} showOthers={showOthers}/>
+                </div>
+                {!showBack&&(
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:12}}>
+                    {/* Bouton révéler les autres zones */}
+                    <button
+                      onClick={e=>{e.stopPropagation();setShowOthers(s=>!s);}}
+                      style={{fontFamily:font,fontSize:11,fontWeight:500,padding:"6px 12px",cursor:"pointer",borderRadius:6,border:`1.5px solid ${showOthers?C.imp:C.border}`,background:showOthers?C.impBg:"transparent",color:showOthers?C.imp:C.textMed,display:"flex",alignItems:"center",gap:6,transition:"all 0.2s"}}
+                    >
+                      {showOthers ? "🙈 Masquer le contexte" : "👁 Voir le contexte"}
+                    </button>
+                    <button
+                      onClick={()=>setShowBack(true)}
+                      style={{fontFamily:font,fontSize:11,fontWeight:600,padding:"6px 14px",cursor:"pointer",borderRadius:6,border:`1.5px solid ${col}`,background:pB(card.packetId),color:col}}
+                    >
+                      Révéler →
+                    </button>
+                  </div>
+                )}
               </div>
-              {!showBack&&<p style={{fontSize:12,color:C.textLt,textAlign:"right",margin:"10px 0 0"}}>Cliquez pour révéler →</p>}
+              {!showBack&&(
+                <div style={{marginTop:8,padding:"8px 12px",background:C.bg,borderRadius:6,border:`1px solid ${C.border}`}}>
+                  <p style={{fontSize:11,color:C.textMed,margin:0,lineHeight:1.6}}>
+                    <strong>👁 Voir le contexte</strong> révèle les autres zones sans dévoiler la réponse.
+                    Clique sur <strong>Révéler</strong> quand tu as ta réponse.
+                  </p>
+                </div>
+              )}
             </div>
           ) : (
             <div style={{perspective:1200,height:260,marginBottom:22}}>
