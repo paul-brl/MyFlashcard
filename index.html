@@ -930,7 +930,8 @@ function Dashboard({currentUser,cards,progress,settings,onStudy,onGlobalStudy,on
           {!isAdmin&&<button onClick={()=>setShowUpgrade(true)} style={{fontFamily:font,fontSize:14,fontWeight:600,padding:"12px 28px",cursor:"pointer",borderRadius:8,border:`1.5px solid ${C.accent}`,background:C.accentBg,color:C.accent}}>💳 S'abonner →</button>}
         </div>
       )}
-        {showUpgrade&&<UpgradeModal currentPlanId={currentUser.plan?.planId} username={currentUser.username} onClose={()=>setShowUpgrade(false)}/>}
+    </div>
+    {showUpgrade&&<UpgradeModal currentPlanId={currentUser.plan?.planId} username={currentUser.username} onClose={()=>setShowUpgrade(false)}/>}
     <Footer/>
   </div>;
 }
