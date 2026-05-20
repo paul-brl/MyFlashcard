@@ -77,6 +77,25 @@ const storage = {
   del: k => { try { localStorage.removeItem(k); } catch {} },
 };
 
+// ─── Individual purchase persistence ─────────────────────────────────────────
+// Stores individually purchased group IDs permanently per user.
+// This is the fallback when the Supabase webhook hasn't updated acc.groups yet.
+const getExtraGroups = u => { try { return JSON.parse(localStorage.getItem(`mx6-extra-${u}`) || "[]"); } catch { return []; } };
+const saveExtraGroups = (u, gs) => { try { localStorage.setItem(`mx6-extra-${u}`, JSON.stringify([...new Set(gs)])); } catch {} };
+
+// Subscription plan = the plan that controls which *tabs* are accessible.
+// Individual g-* plans do NOT change the subscription plan.
+const toSubscriptionPlan = pid => ["sem1","sem2","both","prerentree"].includes(pid) ? pid : "prerentree";
+
+// Given a subscription plan ID + acc.groups from Supabase + local extra groups,
+// compute the full set of accessible group IDs.
+// Prerentrée is ALWAYS included (free for everyone).
+const computeGroups = (subscriptionPlanId, supaGroups, extraGroups) => {
+  const basePlan = PLANS.find(p => p.id === subscriptionPlanId);
+  const baseGroups = basePlan?.groups || [];
+  return [...new Set([...PRERENTREE_IDS, ...baseGroups, ...supaGroups, ...extraGroups])];
+};
+
 const validateEmail = e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e.trim());
 const validatePassword = p => { const hasLen=p.length>=8, hasSpecial=/[!@#$%^&*()\-_=+\[\]{};:'",.<>?/\\|`~]/.test(p); return {ok:hasLen&&hasSpecial,hasLen,hasSpecial}; };
 
@@ -852,8 +871,37 @@ function App(){
         setAccounts([]);
       } finally {
         const saved=storage.get("mx6-session");
-        if(saved){setProg(storage.get(`mx6-prog-${saved.username}`)||{});setCurrentUser(saved);setView("dashboard");}
-        else{setView("login");}
+        if(saved){
+          // ── Apply any locally pending purchase on every load ──
+          // (handles case where Stripe success URL doesn't include ?payment=success)
+          let planId=toSubscriptionPlan(saved.plan?.planId||"prerentree");
+          let groups=Array.isArray(saved.plan?.groups)?saved.plan.groups:[];
+          try{
+            const pending=JSON.parse(localStorage.getItem("mx6-pending-purchase")||"null");
+            // Apply if recent (<20 min) and for this user — regardless of URL params
+            if(pending&&pending.username===saved.username&&Date.now()-pending.ts<1200000){
+              const pp=PLANS.find(p=>p.id===pending.planId);
+              if(pp){
+                const isFullPlan=["sem1","sem2","both"].includes(pending.planId);
+                if(isFullPlan)planId=pending.planId;
+                const extra=getExtraGroups(saved.username);
+                saveExtraGroups(saved.username,[...extra,...pp.groups]);
+              }
+            }
+            // Always clear expired pending purchases (>20 min = user probably canceled)
+            if(pending&&Date.now()-pending.ts>=1200000){
+              localStorage.removeItem("mx6-pending-purchase");
+            }
+          }catch{}
+          // ── Merge all group sources ──
+          const extra=getExtraGroups(saved.username);
+          const restoredGroups=computeGroups(planId,groups,extra);
+          const restored={...saved,plan:{planId,groups:restoredGroups}};
+          setProg(storage.get(`mx6-prog-${saved.username}`)||{});
+          setCurrentUser(restored);
+          storage.set("mx6-session",restored);
+          setView("dashboard");
+        }else{setView("login");}
       }
     }
     init();
@@ -865,38 +913,49 @@ function App(){
     const payment=params.get("payment");
     if(!payment)return;
     window.history.replaceState({},"",window.location.pathname);
-    setPaymentStatus(payment);
+    // On cancel: clear any pending purchase so it's not applied on next load
+    if(payment==="cancel"){
+      localStorage.removeItem("mx6-pending-purchase");
+      setPaymentStatus("cancel");
+      const t=setTimeout(()=>setPaymentStatus(null),6000);return()=>clearTimeout(t);
+    }
     if(payment==="success"&&currentUser.role!=="admin"){
-      // ── Immediate activation via localStorage (before Stripe webhook fires) ──
-      try {
-        const pending=JSON.parse(localStorage.getItem("mx6-pending-purchase")||"null");
-        if(pending&&pending.username===currentUser.username&&Date.now()-pending.ts<600000){
-          const pendingPlan=PLANS.find(p=>p.id===pending.planId);
-          if(pendingPlan){
-            const pendingGroups=pendingPlan.groups||[];
-            const immediateGroups=[...new Set([...(currentUser.plan?.groups||[]),...pendingGroups])];
-            const immediateUser={...currentUser,plan:{planId:pending.planId,groups:immediateGroups}};
-            setCurrentUser(immediateUser);
-            storage.set("mx6-session",immediateUser);
-          }
-          localStorage.removeItem("mx6-pending-purchase");
+      // Pending purchase was already applied in init() — just show banner + sync Supabase
+      setPaymentStatus("success");
+      // Clear any leftover pending purchase (in case init() ran before currentUser was set)
+      const pending=JSON.parse(localStorage.getItem("mx6-pending-purchase")||"null");
+      if(pending&&pending.username===currentUser.username){
+        const pp=PLANS.find(p=>p.id===pending.planId);
+        if(pp){
+          const isFullPlan=["sem1","sem2","both"].includes(pending.planId);
+          const subPlanId=isFullPlan?pending.planId:(currentUser.plan?.planId||"prerentree");
+          const extra=getExtraGroups(currentUser.username);
+          saveExtraGroups(currentUser.username,[...extra,...pp.groups]);
+          const newGroups=computeGroups(subPlanId,currentUser.plan?.groups||[],pp.groups);
+          const immediateUser={...currentUser,plan:{planId:subPlanId,groups:newGroups}};
+          setCurrentUser(immediateUser);
+          storage.set("mx6-session",immediateUser);
         }
-      } catch {}
-      // ── Also fetch from Supabase to confirm (webhook may have updated plan_id/groups) ──
+        localStorage.removeItem("mx6-pending-purchase");
+      }
+      // Sync with Supabase (webhook may have updated acc.groups)
       setTimeout(async()=>{
-        const accs=await supa.getAccounts();
-        if(!accs)return;
-        setAccounts(accs);
-        const acc=accs.find(a=>a.username===currentUser.username);
-        if(acc){
-          const planId=acc.plan_id||acc.planId;
-          const plan=PLANS.find(p=>p.id===planId);
-          const newGroups=acc.groups||plan?.groups||[];
-          const mergedGroups=[...new Set([...(currentUser.plan?.groups||[]),...newGroups])];
-          const newUser={...currentUser,plan:{planId,groups:mergedGroups}};
+        try{
+          const accs=await supa.getAccounts();
+          if(!accs||!Array.isArray(accs))return;
+          setAccounts(accs);
+          const acc=accs.find(a=>a.username===currentUser.username);
+          if(!acc)return;
+          const rawPlanId=acc.plan_id||acc.planId;
+          const isFullPlan=["sem1","sem2","both"].includes(rawPlanId);
+          const subPlanId=isFullPlan?rawPlanId:(currentUser.plan?.planId||"prerentree");
+          const supaGroups=Array.isArray(acc.groups)?acc.groups:[];
+          const extra=getExtraGroups(currentUser.username);
+          const mergedGroups=computeGroups(subPlanId,supaGroups,extra);
+          const newUser={...currentUser,plan:{planId:subPlanId,groups:mergedGroups}};
           setCurrentUser(newUser);
           storage.set("mx6-session",newUser);
-        }
+        }catch{}
       },3000);
     }
     const t=setTimeout(()=>setPaymentStatus(null),8000);return()=>clearTimeout(t);
@@ -907,11 +966,13 @@ function App(){
     if(lc===ADMIN_USERNAME&&password===ADMIN_PASSWORD){const u={username:ADMIN_USERNAME,role:"admin",plan:{planId:"both",groups:ALL}};setProg(storage.get(`mx6-prog-${ADMIN_USERNAME}`)||{});setCurrentUser(u);storage.set("mx6-session",u);setView("dashboard");return true;}
     const acc=accounts.find(a=>a.username===lc&&a.password===password);
     if(acc){
-      const planId=acc.plan_id||acc.planId;
-      const plan=PLANS.find(p=>p.id===planId);
-      // acc.groups is the source of truth — it accumulates all purchases via Supabase webhook
-      const groups=acc.groups||plan?.groups||[];
-      const u={username:acc.username,role:"student",plan:{planId,groups}};
+      const rawPlanId=acc.plan_id||acc.planId;
+      // Only full plans control tab access; individual g-* purchases don't change subscription tier
+      const subPlanId=toSubscriptionPlan(rawPlanId);
+      const supaGroups=Array.isArray(acc.groups)?acc.groups:[];
+      const extra=getExtraGroups(lc);
+      const groups=computeGroups(subPlanId,supaGroups,extra);
+      const u={username:acc.username,role:"student",plan:{planId:subPlanId,groups}};
       setProg(storage.get(`mx6-prog-${lc}`)||{});setCurrentUser(u);storage.set("mx6-session",u);setView("dashboard");return true;
     }
     return false;
@@ -925,6 +986,35 @@ function App(){
   const handleSaveUser=useCallback(async acc=>{await supa.upsertAccount(acc);setAccounts(p=>p.find(a=>a.username===acc.username)?p.map(a=>a.username===acc.username?{...a,...acc,plan_id:acc.planId}:a):[...p,{...acc,plan_id:acc.planId}]);},[]);
   const handleDeleteUser=useCallback(async username=>{await supa.deleteAccount(username);setAccounts(p=>p.filter(a=>a.username!==username));},[]);
   const handleRegister=useCallback(async newAcc=>{await supa.upsertAccount(newAcc);setAccounts(p=>[...p,{...newAcc,plan_id:newAcc.planId}]);const u={username:newAcc.username,role:"student",plan:{planId:newAcc.planId,groups:newAcc.groups}};setProg({});setCurrentUser(u);storage.set("mx6-session",u);},[]);
+
+  // ── Background Supabase sync on login: picks up webhook-applied group changes ──
+  useEffect(()=>{
+    if(!currentUser||currentUser.role==="admin")return;
+    const timer=setTimeout(async()=>{
+      try{
+        const accs=await supa.getAccounts();
+        if(!accs||!Array.isArray(accs))return;
+        setAccounts(accs);
+        const acc=accs.find(a=>a.username===currentUser.username);
+        if(!acc)return;
+        const rawPlanId=acc.plan_id||acc.planId;
+        const isFullPlan=["sem1","sem2","both"].includes(rawPlanId);
+        const subPlanId=isFullPlan?rawPlanId:(currentUser.plan?.planId||"prerentree");
+        const supaGroups=Array.isArray(acc.groups)?acc.groups:[];
+        const extra=getExtraGroups(currentUser.username);
+        const mergedGroups=computeGroups(subPlanId,supaGroups,extra);
+        // Only update if groups changed
+        const curStr=JSON.stringify([...(currentUser.plan?.groups||[])].sort());
+        const newStr=JSON.stringify([...mergedGroups].sort());
+        if(subPlanId!==currentUser.plan?.planId||curStr!==newStr){
+          const newUser={...currentUser,plan:{planId:subPlanId,groups:mergedGroups}};
+          setCurrentUser(newUser);
+          storage.set("mx6-session",newUser);
+        }
+      }catch{}
+    },4000); // Delay 4s to let Supabase webhook fire first
+    return()=>clearTimeout(timer);
+  },[currentUser?.username]); // Run once per login session
 
   const startStudy=useCallback((gid,num,chapterId,pkId)=>{
     const queue=buildQueue(cards.filter(c=>c.groupId===gid&&c.num===num&&c.chapterId===chapterId&&c.packetId===pkId),prog,settings);
