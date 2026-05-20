@@ -85,6 +85,8 @@ const STRIPE_LINKS = { "sem1":"https://buy.stripe.com/5kQ7sN68i58ocCW0gDasg00","
 function redirectToStripe(planId, username) {
   const base = STRIPE_LINKS[planId];
   if (!base||base.includes("REMPLACE_MOI")) { alert("Le paiement en ligne n'est pas encore configuré pour ce plan."); return false; }
+  // Store pending purchase locally — applied immediately on return even if webhook is slow
+  try { localStorage.setItem("mx6-pending-purchase", JSON.stringify({ planId, username, ts: Date.now() })); } catch {}
   window.location.href = `${base}?client_reference_id=${encodeURIComponent(`${username}|${planId}`)}`;
   return true;
 }
@@ -514,40 +516,116 @@ function UpgradeModal({currentPlanId,username,onClose}){
 }
 
 // ─── ShopTab ──────────────────────────────────────────────────────────────────
-function ShopTab({userGroups,planId,username,onShowPacks}){
-  const sem1Plans=PLANS.filter(p=>["g-cell-bio","g-histo","g-biochem","g-biomol","g-biophys","g-biostat"].includes(p.id));
-  const sem2Plans=PLANS.filter(p=>["g-anatomie","g-physio","g-medic","g-ssh"].includes(p.id));
+function ShopTab({userGroups,planId,username,cards,progress,settings,onStudy,onShowPacks}){
+  const subjectPlans=PLANS.filter(p=>p.id.startsWith("g-"));
+  const sem1Plans=subjectPlans.filter(p=>["g-cell-bio","g-histo","g-biochem","g-biomol","g-biophys","g-biostat"].includes(p.id));
+  const sem2Plans=subjectPlans.filter(p=>["g-anatomie","g-physio","g-medic","g-ssh"].includes(p.id));
+
   const isIncluded=(plan)=>{
     if(planId==="both")return true;
     if(planId==="sem1"&&["g-cell-bio","g-histo","g-biochem","g-biomol","g-biophys","g-biostat"].includes(plan.id))return true;
     if(planId==="sem2"&&["g-anatomie","g-physio","g-medic","g-ssh"].includes(plan.id))return true;
     return plan.groups.every(gid=>userGroups.includes(gid));
   };
-  function PlanCard({plan}){
-    const [redir,setRedir]=useState(false);
-    const included=isIncluded(plan);
+
+  // Study block for a purchased subject
+  function PurchasedBlock({plan}){
+    const [open,setOpen]=useState(false);
+    const [activeCours,setActiveCours]=useState(null);
+    const group=GROUPS.find(g=>g.id===plan.groups[0]);
+    if(!group)return null;
+    const chapters=activeCours?getChapters(group.id,activeCours):[];
+    const totalDue=group.nums.reduce((acc,n)=>acc+courseDueCount(cards,progress,group.id,n),0);
+
+    function PktBtn({chapterId,pk}){
+      const col=pC(pk.id),bg=pB(pk.id);
+      const {total,due}=chapterStats(cards,progress,group.id,activeCours,chapterId,pk.id);
+      const hasDue=due>0,upToDate=total>0&&!hasDue;
+      return <button onClick={()=>total>0&&onStudy(group.id,activeCours,chapterId,pk.id)} style={{fontFamily:font,fontSize:11,fontWeight:500,padding:"6px 10px",cursor:total>0?"pointer":"default",borderRadius:6,border:`1.5px solid ${hasDue?col:upToDate?C.border:"#e8e5e0"}`,background:hasDue?bg:C.surface,color:hasDue?col:upToDate?C.textLt:"#c0bbb5",display:"flex",flexDirection:"column",alignItems:"center",gap:2,minWidth:78}} onMouseEnter={e=>{if(total>0)e.currentTarget.style.borderColor=col;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=hasDue?col:upToDate?C.border:"#e8e5e0";}}><span style={{fontSize:10}}>{pk.label}</span><span style={{fontSize:10,fontWeight:400}}>{total===0?"vide":hasDue?`${due} carte${due>1?"s":""}` :"✓ à jour"}</span></button>;
+    }
+
     return(
-      <div style={{background:C.surface,border:`1.5px solid ${included?C.good:C.border}`,borderRadius:10,padding:"16px",display:"flex",flexDirection:"column",gap:8,transition:"box-shadow 0.15s"}} onMouseEnter={e=>{if(!included)e.currentTarget.style.boxShadow="0 4px 16px rgba(0,0,0,0.08)";}} onMouseLeave={e=>{e.currentTarget.style.boxShadow="none";}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
-          <p style={{fontFamily:serif,fontSize:14,margin:0,color:included?C.good:C.text,lineHeight:1.3}}>{plan.label}</p>
-          {included&&<Tag color={C.good} bg={C.goodBg} small>✓ Débloqué</Tag>}
+      <div style={{background:C.surface,border:`1.5px solid ${C.good}`,borderRadius:10,overflow:"hidden",marginBottom:10}}>
+        {/* Header */}
+        <div style={{padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",background:C.goodBg}}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:16}}>✓</span>
+            <div>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}>
+                <p style={{fontFamily:serif,fontSize:14,margin:0,color:C.good}}>{plan.label}</p>
+                <Tag color={C.good} bg={"#d1fae5"} small>Débloqué</Tag>
+                {totalDue>0&&<span style={{fontFamily:mono,fontSize:8,fontWeight:700,padding:"1px 6px",borderRadius:10,background:C.accent,color:"#fff"}}>{totalDue} à réviser</span>}
+              </div>
+              <p style={{fontSize:11,color:C.good,margin:0,opacity:0.8}}>{plan.desc}</p>
+            </div>
+          </div>
+          <button onClick={()=>{setOpen(o=>!o);setActiveCours(null);}} style={{fontFamily:font,fontSize:12,fontWeight:600,padding:"8px 16px",cursor:"pointer",borderRadius:6,border:`1.5px solid ${C.good}`,background:open?"#d1fae5":C.good,color:open?C.good:"#fff",display:"flex",alignItems:"center",gap:6,whiteSpace:"nowrap",flexShrink:0,marginLeft:12}}>
+            {open?"Fermer ▲":"Accéder au cours ▼"}
+          </button>
         </div>
+
+        {/* Expanded: course selector + chapters */}
+        {open&&(
+          <div style={{animation:"fadeIn 0.18s ease"}}>
+            <div style={{display:"flex",gap:8,padding:"10px 18px",flexWrap:"wrap",borderBottom:activeCours?`1px solid ${C.border}`:"none",borderTop:`1px solid ${C.border}`,background:C.surface}}>
+              {group.nums.map(n=>{const active=activeCours===n;const due=courseDueCount(cards,progress,group.id,n);return<button key={n} onClick={()=>setActiveCours(active?null:n)} style={{fontFamily:font,fontSize:12,fontWeight:active?600:400,padding:"8px 16px",cursor:"pointer",borderRadius:7,border:`1.5px solid ${active?C.accent:due>0?C.good:C.border}`,background:active?C.accentBg:due>0?C.goodBg:"transparent",color:active?C.accent:due>0?C.good:C.textMed,display:"flex",alignItems:"center",gap:7}}><span>Cours {n}</span>{due>0&&!active&&<span style={{fontFamily:mono,fontSize:8,fontWeight:700,padding:"1px 5px",borderRadius:10,background:C.good,color:"#fff"}}>{due}</span>}<span style={{fontSize:10,opacity:0.6}}>{active?"▲":"▼"}</span></button>;})}
+            </div>
+            {activeCours&&chapters.length>0&&chapters.map((chName,i)=>{const chIdx=i+1;const chDue=PACKETS.reduce((acc,pk)=>acc+chapterStats(cards,progress,group.id,activeCours,chIdx,pk.id).due,0);return<div key={chIdx} style={{display:"flex",alignItems:"center",padding:"9px 18px",gap:12,borderTop:`1px solid ${C.border}`,flexWrap:"wrap"}}><div style={{display:"flex",alignItems:"center",gap:8,flex:1,minWidth:180}}><span style={{fontFamily:mono,fontSize:9,letterSpacing:1,color:C.textLt,minWidth:18,flexShrink:0}}>{chIdx}</span><span style={{fontFamily:font,fontSize:13,color:chDue>0?C.text:C.textMed,fontWeight:chDue>0?500:400}}>{chName}</span>{chDue>0&&<span style={{fontFamily:mono,fontSize:8,fontWeight:700,padding:"1px 5px",borderRadius:10,background:C.accent,color:"#fff",flexShrink:0}}>{chDue}</span>}</div><div style={{display:"flex",gap:6,flexShrink:0}}>{PACKETS.map(pk=><PktBtn key={pk.id} chapterId={chIdx} pk={pk}/>)}</div></div>;})}
+            {activeCours&&chapters.length===0&&<div style={{padding:"12px 18px"}}><p style={{fontSize:12,color:C.textLt,margin:0}}>Pas encore de chapitres définis pour ce cours.</p></div>}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Buy card for non-purchased subjects
+  function BuyCard({plan}){
+    const [redir,setRedir]=useState(false);
+    return(
+      <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"16px",display:"flex",flexDirection:"column",gap:8,transition:"box-shadow 0.15s"}} onMouseEnter={e=>{e.currentTarget.style.boxShadow="0 4px 16px rgba(0,0,0,0.08)";}} onMouseLeave={e=>{e.currentTarget.style.boxShadow="none";}}>
+        <p style={{fontFamily:serif,fontSize:14,margin:0,lineHeight:1.3}}>{plan.label}</p>
         <p style={{fontSize:11,color:C.textMed,margin:0,lineHeight:1.5,flex:1}}>{plan.desc}</p>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:4}}>
-          <p style={{fontSize:22,fontWeight:300,margin:0,color:included?C.good:C.text}}>{plan.price}</p>
-          {!included?<button onClick={()=>{setRedir(true);setTimeout(()=>redirectToStripe(plan.id,username),300);}} disabled={redir} style={{fontFamily:font,fontSize:12,fontWeight:600,padding:"8px 16px",cursor:redir?"wait":"pointer",borderRadius:6,border:`1.5px solid ${C.imp}`,background:redir?C.imp:C.impBg,color:redir?"#fff":C.imp,display:"flex",alignItems:"center",gap:5,transition:"all 0.2s",whiteSpace:"nowrap"}}>{redir?<><span style={{display:"inline-block",animation:"spin 0.8s linear infinite"}}>↻</span> Redirection…</>:<>Acheter →</>}</button>:<span style={{fontSize:12,color:C.good,fontWeight:500,display:"flex",alignItems:"center",gap:4}}>✓ Actif</span>}
+          <p style={{fontSize:22,fontWeight:300,margin:0}}>{plan.price}</p>
+          <button onClick={()=>{setRedir(true);setTimeout(()=>redirectToStripe(plan.id,username),300);}} disabled={redir} style={{fontFamily:font,fontSize:12,fontWeight:600,padding:"8px 16px",cursor:redir?"wait":"pointer",borderRadius:6,border:`1.5px solid ${C.imp}`,background:redir?C.imp:C.impBg,color:redir?"#fff":C.imp,display:"flex",alignItems:"center",gap:5,transition:"all 0.2s",whiteSpace:"nowrap"}}>{redir?<><span style={{display:"inline-block",animation:"spin 0.8s linear infinite"}}>↻</span> Redirection…</>:<>Acheter →</>}</button>
         </div>
       </div>
     );
   }
+
+  const purchasedSem1=sem1Plans.filter(p=>isIncluded(p));
+  const availableSem1=sem1Plans.filter(p=>!isIncluded(p));
+  const purchasedSem2=sem2Plans.filter(p=>isIncluded(p));
+  const availableSem2=sem2Plans.filter(p=>!isIncluded(p));
+
   return(
     <div style={{animation:"fadeIn 0.18s ease"}}>
       <p style={{fontFamily:serif,fontSize:18,margin:"0 0 4px"}}>Acheter par matière</p>
-      <p style={{fontSize:13,color:C.textMed,margin:"0 0 22px",lineHeight:1.6}}>Accède uniquement aux matières dont tu as besoin. Les matières débloquées apparaissent dans tes onglets Semestre 1 / Semestre 2.</p>
-      <p style={{fontFamily:mono,fontSize:9,letterSpacing:2,textTransform:"uppercase",color:C.textLt,margin:"0 0 10px"}}>Semestre 1</p>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:10,marginBottom:24}}>{sem1Plans.map(plan=><PlanCard key={plan.id} plan={plan}/>)}</div>
-      <p style={{fontFamily:mono,fontSize:9,letterSpacing:2,textTransform:"uppercase",color:C.textLt,margin:"0 0 10px"}}>Semestre 2</p>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:10,marginBottom:24}}>{sem2Plans.map(plan=><PlanCard key={plan.id} plan={plan}/>)}</div>
+      <p style={{fontSize:13,color:C.textMed,margin:"0 0 22px",lineHeight:1.6}}>Accède uniquement aux matières dont tu as besoin, sans t'engager sur un semestre entier.</p>
+
+      {/* Purchased subjects shown first with study access */}
+      {(purchasedSem1.length>0||purchasedSem2.length>0)&&(
+        <div style={{marginBottom:24}}>
+          <p style={{fontFamily:mono,fontSize:9,letterSpacing:2,textTransform:"uppercase",color:C.good,margin:"0 0 10px"}}>✓ Mes matières débloquées</p>
+          {purchasedSem1.map(plan=><PurchasedBlock key={plan.id} plan={plan}/>)}
+          {purchasedSem2.map(plan=><PurchasedBlock key={plan.id} plan={plan}/>)}
+        </div>
+      )}
+
+      {/* Available subjects to buy */}
+      {availableSem1.length>0&&(
+        <div style={{marginBottom:24}}>
+          <p style={{fontFamily:mono,fontSize:9,letterSpacing:2,textTransform:"uppercase",color:C.textLt,margin:"0 0 10px"}}>Semestre 1 — disponible à l'achat</p>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:10}}>{availableSem1.map(plan=><BuyCard key={plan.id} plan={plan}/>)}</div>
+        </div>
+      )}
+      {availableSem2.length>0&&(
+        <div style={{marginBottom:24}}>
+          <p style={{fontFamily:mono,fontSize:9,letterSpacing:2,textTransform:"uppercase",color:C.textLt,margin:"0 0 10px"}}>Semestre 2 — disponible à l'achat</p>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:10}}>{availableSem2.map(plan=><BuyCard key={plan.id} plan={plan}/>)}</div>
+        </div>
+      )}
+
       <div style={{background:C.accentBg,border:`1px solid ${C.accent}20`,borderRadius:10,padding:"16px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:12}}>
         <div><p style={{fontSize:13,color:C.accent,fontWeight:600,margin:"0 0 2px"}}>💡 Packs semestre — meilleur rapport qualité/prix</p><p style={{fontSize:12,color:C.textMed,margin:0}}>Sem. 1 complet à 99 € · Sem. 2 complet à 149 € · Année entière à 200 €</p></div>
         <button onClick={onShowPacks} style={{fontFamily:font,fontSize:12,fontWeight:600,padding:"9px 18px",cursor:"pointer",borderRadius:6,border:`1.5px solid ${C.accent}`,background:C.accent,color:"#fff",whiteSpace:"nowrap"}}>Voir les packs →</button>
@@ -575,45 +653,15 @@ function Dashboard({currentUser,cards,progress,settings,onStudy,onGlobalStudy,on
   const defaultTab=planId==="sem2"?"sem2":planId==="both"?"sem1":planId==="sem1"?"sem1":"prerentree";
   const [activeTab,setActiveTab]=useState(defaultTab);
 
-  // ── FIX 1: hasTabAccess handles undefined AND individual subject purchases ──
+  // hasTabAccess: only grants access via full semester/annual plans — individual subject access is in ShopTab only
   const hasTabAccess=useCallback(tab=>{
     if(!tab)return false;
     if(isAdmin)return true;
-    if(tab.planIds.includes(planId))return true;
-    // Grant access if user owns at least one individual group from this semester
-    const tabGroupIds=GROUPS.filter(g=>g.sem===tab.sem).map(g=>g.id);
-    return tabGroupIds.some(gid=>userGroups.includes(gid));
-  },[isAdmin,planId,userGroups]);
+    return tab.planIds.includes(planId);
+  },[isAdmin,planId]);
 
   const tabGroups=useMemo(()=>{const t=TABS.find(t=>t.id===activeTab);return GROUPS.filter(g=>g.sem===t?.sem);},[activeTab]);
-  const visibleIds=isAdmin?[...PRERENTREE_IDS,...ALL]:userGroups;
-
-  // Within a tab: which groups the user can see vs which are locked
-  const accessibleTabGroups=useMemo(()=>tabGroups.filter(g=>isAdmin||userGroups.includes(g.id)),[tabGroups,isAdmin,userGroups]);
-  const lockedTabGroups=useMemo(()=>tabGroups.filter(g=>!isAdmin&&!userGroups.includes(g.id)),[tabGroups,isAdmin,userGroups]);
-
-  // ── Locked group row: shows buy button inline ──
-  function LockedGroupRow({group}){
-    const [redir,setRedir]=useState(false);
-    const plan=PLANS.find(p=>p.groups.includes(group.id)&&p.id.startsWith("g-"));
-    return(
-      <div style={{background:C.surface,border:`1.5px dashed ${C.border}`,borderRadius:10,padding:"14px 18px",marginBottom:12,display:"flex",justifyContent:"space-between",alignItems:"center",opacity:0.75}}>
-        <div style={{display:"flex",alignItems:"center",gap:12}}>
-          <span style={{fontSize:20}}>🔒</span>
-          <div>
-            <p style={{fontFamily:serif,fontSize:15,margin:0,color:C.textMed}}>{group.label}</p>
-            <p style={{fontSize:11,color:C.textLt,margin:"2px 0 0"}}>{plan?.desc||"Matière non incluse dans ton abonnement"}</p>
-          </div>
-        </div>
-        <div style={{display:"flex",alignItems:"center",gap:10,flexShrink:0,marginLeft:16}}>
-          {plan&&<span style={{fontFamily:serif,fontSize:16,fontWeight:300,color:C.text}}>{plan.price}</span>}
-          <button onClick={()=>{if(!plan)return;setRedir(true);setTimeout(()=>redirectToStripe(plan.id,currentUser.username),300);}} disabled={redir||!plan} style={{fontFamily:font,fontSize:12,fontWeight:600,padding:"8px 16px",cursor:redir||!plan?"not-allowed":"pointer",borderRadius:6,border:`1.5px solid ${C.imp}`,background:redir?C.imp:C.impBg,color:redir?"#fff":C.imp,display:"flex",alignItems:"center",gap:5,transition:"all 0.2s",whiteSpace:"nowrap"}}>{redir?<><span style={{display:"inline-block",animation:"spin 0.8s linear infinite"}}>↻</span> Redirection…</>:<>Débloquer →</>}</button>
-        </div>
-      </div>
-    );
-  }
-
-  // GroupBlock with course tabs → chapter rows
+  const visibleIds=isAdmin?[...PRERENTREE_IDS,...ALL]:userGroups;  // GroupBlock with course tabs → chapter rows
   function GroupBlock({group}){
     const [activeCours,setActiveCours]=useState(null);
     const chapters=activeCours?getChapters(group.id,activeCours):[];
@@ -640,7 +688,7 @@ function Dashboard({currentUser,cards,progress,settings,onStudy,onGlobalStudy,on
     </div>;
   }
 
-  // ── FIX 2: tabHasAccess now safe because hasTabAccess handles undefined ──
+  // tabHasAccess: safe for undefined (when activeTab="shop")
   const tabHasAccess=hasTabAccess(TABS.find(t=>t.id===activeTab));
 
   return <div style={{fontFamily:font,background:C.bg,minHeight:"100vh",color:C.text,paddingTop:paymentStatus?56:0}}>
@@ -655,8 +703,6 @@ function Dashboard({currentUser,cards,progress,settings,onStudy,onGlobalStudy,on
           <div style={{display:"flex",alignItems:"center",gap:8}}>
             <p style={{fontSize:15,margin:0,color:C.text}}>{currentPlan?.label||"Pré-rentrée"}</p>
             <Tag color={currentPlan?.price==="Gratuit"?C.util:C.accent} bg={currentPlan?.price==="Gratuit"?C.utilBg:C.accentBg} small>{currentPlan?.price||"Gratuit"}</Tag>
-            {/* Show individually purchased subjects */}
-            {!isAdmin&&userGroups.filter(gid=>![...PRERENTREE_IDS,...(currentPlan?.groups||[])].includes(gid)).map(gid=>{const g=GROUPS.find(gr=>gr.id===gid);return g?<Tag key={gid} color={C.imp} bg={C.impBg} small>+{g.label}</Tag>:null;})}
           </div>
         </div>
         {!isAdmin&&<button onClick={()=>setShowUpgrade(true)} style={{fontFamily:font,fontSize:12,fontWeight:600,padding:"9px 18px",cursor:"pointer",borderRadius:6,border:`1.5px solid ${C.accent}`,background:C.accentBg,color:C.accent,display:"flex",alignItems:"center",gap:7}}>💳 Changer d'abonnement</button>}
@@ -683,23 +729,13 @@ function Dashboard({currentUser,cards,progress,settings,onStudy,onGlobalStudy,on
         {!isAdmin&&<button onClick={()=>setActiveTab("shop")} style={{fontFamily:font,fontSize:13,fontWeight:activeTab==="shop"?600:400,padding:"8px 20px",cursor:"pointer",borderRadius:8,border:`1.5px solid ${activeTab==="shop"?C.imp:C.border}`,background:activeTab==="shop"?C.impBg:"transparent",color:activeTab==="shop"?C.imp:C.textMed,display:"flex",alignItems:"center",gap:6}}>🛒 Acheter par matière</button>}
       </div>
 
-      {/* ── FIX 3: shop tab renders correctly, no crash on tabHasAccess ── */}
+      {/* shop tab or semester tab content */}
       {activeTab==="shop"&&!isAdmin?(
-        <ShopTab userGroups={userGroups} planId={planId} username={currentUser.username} onShowPacks={()=>setShowUpgrade(true)}/>
+        <ShopTab userGroups={userGroups} planId={planId} username={currentUser.username} cards={cards} progress={progress} settings={settings} onStudy={onStudy} onShowPacks={()=>setShowUpgrade(true)}/>
       ):tabHasAccess?(
         <div>
           <p style={{fontFamily:serif,fontSize:18,margin:"0 0 14px"}}>Par matière · Cours · Chapitre</p>
-          {/* ── FIX 4: only show groups the user has access to ── */}
-          {accessibleTabGroups.map(g=><GroupBlock key={g.id} group={g}/>)}
-          {/* ── FIX 5: locked groups shown inline with buy button ── */}
-          {lockedTabGroups.length>0&&(
-            <div>
-              <p style={{fontFamily:mono,fontSize:9,letterSpacing:2,textTransform:"uppercase",color:C.textLt,margin:"20px 0 10px"}}>
-                Matières non débloquées ({lockedTabGroups.length})
-              </p>
-              {lockedTabGroups.map(g=><LockedGroupRow key={g.id} group={g}/>)}
-            </div>
-          )}
+          {tabGroups.map(g=><GroupBlock key={g.id} group={g}/>)}
         </div>
       ):(
         <div style={{border:`1.5px dashed ${C.border}`,borderRadius:12,padding:"48px 24px",textAlign:"center",background:C.surface}}>
@@ -831,6 +867,22 @@ function App(){
     window.history.replaceState({},"",window.location.pathname);
     setPaymentStatus(payment);
     if(payment==="success"&&currentUser.role!=="admin"){
+      // ── Immediate activation via localStorage (before Stripe webhook fires) ──
+      try {
+        const pending=JSON.parse(localStorage.getItem("mx6-pending-purchase")||"null");
+        if(pending&&pending.username===currentUser.username&&Date.now()-pending.ts<600000){
+          const pendingPlan=PLANS.find(p=>p.id===pending.planId);
+          if(pendingPlan){
+            const pendingGroups=pendingPlan.groups||[];
+            const immediateGroups=[...new Set([...(currentUser.plan?.groups||[]),...pendingGroups])];
+            const immediateUser={...currentUser,plan:{planId:pending.planId,groups:immediateGroups}};
+            setCurrentUser(immediateUser);
+            storage.set("mx6-session",immediateUser);
+          }
+          localStorage.removeItem("mx6-pending-purchase");
+        }
+      } catch {}
+      // ── Also fetch from Supabase to confirm (webhook may have updated plan_id/groups) ──
       setTimeout(async()=>{
         const accs=await supa.getAccounts();
         if(!accs)return;
@@ -840,13 +892,12 @@ function App(){
           const planId=acc.plan_id||acc.planId;
           const plan=PLANS.find(p=>p.id===planId);
           const newGroups=acc.groups||plan?.groups||[];
-          // ── FIX 3: merge groups — accumulate individual purchases instead of replacing ──
           const mergedGroups=[...new Set([...(currentUser.plan?.groups||[]),...newGroups])];
           const newUser={...currentUser,plan:{planId,groups:mergedGroups}};
           setCurrentUser(newUser);
           storage.set("mx6-session",newUser);
         }
-      },2000);
+      },3000);
     }
     const t=setTimeout(()=>setPaymentStatus(null),8000);return()=>clearTimeout(t);
   },[currentUser]);
@@ -858,7 +909,7 @@ function App(){
     if(acc){
       const planId=acc.plan_id||acc.planId;
       const plan=PLANS.find(p=>p.id===planId);
-      // ── FIX 3b: at login, use acc.groups directly (already includes all purchases) ──
+      // acc.groups is the source of truth — it accumulates all purchases via Supabase webhook
       const groups=acc.groups||plan?.groups||[];
       const u={username:acc.username,role:"student",plan:{planId,groups}};
       setProg(storage.get(`mx6-prog-${lc}`)||{});setCurrentUser(u);storage.set("mx6-session",u);setView("dashboard");return true;
