@@ -69,6 +69,26 @@ const supa = {
       return r.ok;
     } catch { return false; }
   },
+  // Persist purchased groups to Supabase — called after every individual subject purchase
+  updateGroups: async (username, groups, planId) => {
+    try {
+      const body = { groups };
+      if (planId) body.plan_id = planId;
+      const r = await fetch(`${SUPA_URL}/rest/v1/accounts?username=eq.${encodeURIComponent(username)}`, {
+        method: "PATCH", headers: { ...H, "Prefer": "return=minimal" },
+        body: JSON.stringify(body),
+      });
+      return r.ok;
+    } catch { return false; }
+  },
+  // Fetch a single user's account (lightweight alternative to getAccounts)
+  getAccount: async (username) => {
+    try {
+      const r = await fetch(`${SUPA_URL}/rest/v1/accounts?username=eq.${encodeURIComponent(username)}&select=*`, { headers: H });
+      const d = await r.json();
+      return Array.isArray(d) && d.length > 0 ? d[0] : null;
+    } catch { return null; }
+  },
 };
 
 const storage = {
@@ -872,28 +892,29 @@ function App(){
       } finally {
         const saved=storage.get("mx6-session");
         if(saved){
-          // ── Apply any locally pending purchase on every load ──
-          // (handles case where Stripe success URL doesn't include ?payment=success)
           let planId=toSubscriptionPlan(saved.plan?.planId||"prerentree");
-          let groups=Array.isArray(saved.plan?.groups)?saved.plan.groups:[];
+          let groups=Array.isArray(saved.plan?.groups)?[...saved.plan.groups]:[];
+          let pendingApplied=false;
+          let pendingGroups=[];
           try{
             const pending=JSON.parse(localStorage.getItem("mx6-pending-purchase")||"null");
-            // Apply if recent (<20 min) and for this user — regardless of URL params
             if(pending&&pending.username===saved.username&&Date.now()-pending.ts<1200000){
+              // Recent pending purchase — apply it (user just returned from Stripe)
               const pp=PLANS.find(p=>p.id===pending.planId);
               if(pp){
                 const isFullPlan=["sem1","sem2","both"].includes(pending.planId);
                 if(isFullPlan)planId=pending.planId;
-                const extra=getExtraGroups(saved.username);
-                saveExtraGroups(saved.username,[...extra,...pp.groups]);
+                pendingGroups=pp.groups||[];
+                saveExtraGroups(saved.username,[...getExtraGroups(saved.username),...pendingGroups]);
+                pendingApplied=true;
               }
-            }
-            // Always clear expired pending purchases (>20 min = user probably canceled)
-            if(pending&&Date.now()-pending.ts>=1200000){
+              localStorage.removeItem("mx6-pending-purchase");
+            } else if(pending&&Date.now()-pending.ts>=1200000){
+              // Expired pending purchase — clear it (user probably canceled)
               localStorage.removeItem("mx6-pending-purchase");
             }
           }catch{}
-          // ── Merge all group sources ──
+          // Merge: session groups + extra groups (includes all previously saved individual purchases)
           const extra=getExtraGroups(saved.username);
           const restoredGroups=computeGroups(planId,groups,extra);
           const restored={...saved,plan:{planId,groups:restoredGroups}};
@@ -901,6 +922,10 @@ function App(){
           setCurrentUser(restored);
           storage.set("mx6-session",restored);
           setView("dashboard");
+          // ── Persist new purchase to Supabase backend (makes it permanent across devices) ──
+          if(pendingApplied&&saved.username){
+            supa.updateGroups(saved.username,restoredGroups,planId).catch(()=>{});
+          }
         }else{setView("login");}
       }
     }
@@ -920,9 +945,8 @@ function App(){
       const t=setTimeout(()=>setPaymentStatus(null),6000);return()=>clearTimeout(t);
     }
     if(payment==="success"&&currentUser.role!=="admin"){
-      // Pending purchase was already applied in init() — just show banner + sync Supabase
       setPaymentStatus("success");
-      // Clear any leftover pending purchase (in case init() ran before currentUser was set)
+      // Apply any remaining pending purchase not yet handled by init()
       const pending=JSON.parse(localStorage.getItem("mx6-pending-purchase")||"null");
       if(pending&&pending.username===currentUser.username){
         const pp=PLANS.find(p=>p.id===pending.planId);
@@ -935,17 +959,17 @@ function App(){
           const immediateUser={...currentUser,plan:{planId:subPlanId,groups:newGroups}};
           setCurrentUser(immediateUser);
           storage.set("mx6-session",immediateUser);
+          // ── Persist to Supabase immediately (permanent cross-device storage) ──
+          supa.updateGroups(currentUser.username,newGroups,isFullPlan?subPlanId:undefined).catch(()=>{});
         }
         localStorage.removeItem("mx6-pending-purchase");
       }
-      // Sync with Supabase (webhook may have updated acc.groups)
+      // Also re-fetch Supabase to catch webhook-applied changes
       setTimeout(async()=>{
         try{
-          const accs=await supa.getAccounts();
-          if(!accs||!Array.isArray(accs))return;
-          setAccounts(accs);
-          const acc=accs.find(a=>a.username===currentUser.username);
+          const acc=await supa.getAccount(currentUser.username);
           if(!acc)return;
+          setAccounts(prev=>prev.map(a=>a.username===currentUser.username?{...a,...acc}:a));
           const rawPlanId=acc.plan_id||acc.planId;
           const isFullPlan=["sem1","sem2","both"].includes(rawPlanId);
           const subPlanId=isFullPlan?rawPlanId:(currentUser.plan?.planId||"prerentree");
@@ -992,10 +1016,7 @@ function App(){
     if(!currentUser||currentUser.role==="admin")return;
     const timer=setTimeout(async()=>{
       try{
-        const accs=await supa.getAccounts();
-        if(!accs||!Array.isArray(accs))return;
-        setAccounts(accs);
-        const acc=accs.find(a=>a.username===currentUser.username);
+        const acc=await supa.getAccount(currentUser.username);
         if(!acc)return;
         const rawPlanId=acc.plan_id||acc.planId;
         const isFullPlan=["sem1","sem2","both"].includes(rawPlanId);
@@ -1003,7 +1024,12 @@ function App(){
         const supaGroups=Array.isArray(acc.groups)?acc.groups:[];
         const extra=getExtraGroups(currentUser.username);
         const mergedGroups=computeGroups(subPlanId,supaGroups,extra);
-        // Only update if groups changed
+        // Push any locally-stored extra groups that aren't in Supabase yet → persistent backend sync
+        const extraNotInSupa=extra.filter(g=>!supaGroups.includes(g));
+        if(extraNotInSupa.length>0){
+          supa.updateGroups(currentUser.username,mergedGroups,isFullPlan?subPlanId:undefined).catch(()=>{});
+        }
+        // Update local state if anything changed
         const curStr=JSON.stringify([...(currentUser.plan?.groups||[])].sort());
         const newStr=JSON.stringify([...mergedGroups].sort());
         if(subPlanId!==currentUser.plan?.planId||curStr!==newStr){
@@ -1012,9 +1038,9 @@ function App(){
           storage.set("mx6-session",newUser);
         }
       }catch{}
-    },4000); // Delay 4s to let Supabase webhook fire first
+    },4000);
     return()=>clearTimeout(timer);
-  },[currentUser?.username]); // Run once per login session
+  },[currentUser?.username]);
 
   const startStudy=useCallback((gid,num,chapterId,pkId)=>{
     const queue=buildQueue(cards.filter(c=>c.groupId===gid&&c.num===num&&c.chapterId===chapterId&&c.packetId===pkId),prog,settings);
