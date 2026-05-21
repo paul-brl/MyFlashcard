@@ -89,6 +89,24 @@ const supa = {
       return Array.isArray(d) && d.length > 0 ? d[0] : null;
     } catch { return null; }
   },
+  // ─── User personal cards (user_cards table) ──────────────────────────────────
+  getUserCards: async (username) => {
+    try {
+      const r = await fetch(`${SUPA_URL}/rest/v1/user_cards?username=eq.${encodeURIComponent(username)}&select=*`, { headers: H });
+      const d = await r.json();
+      if (!Array.isArray(d)) return [];
+      return d.map(c => ({ id:c.id, front:c.front, back:c.back, groupId:c.group_id, num:c.num, chapterId:c.chapter_id||1, packetId:c.packet_id, username:c.username, isUserCard:true }));
+    } catch { return []; }
+  },
+  upsertUserCard: async (card) => {
+    try {
+      await fetch(`${SUPA_URL}/rest/v1/user_cards`, {
+        method:"POST", headers:{...H,"Prefer":"resolution=merge-duplicates"},
+        body: JSON.stringify({ id:card.id, username:card.username, front:card.front, back:card.back, group_id:card.groupId, num:card.num, chapter_id:card.chapterId||1, packet_id:card.packetId }),
+      });
+    } catch {}
+  },
+  deleteUserCard: async (id) => { try { await fetch(`${SUPA_URL}/rest/v1/user_cards?id=eq.${id}`,{method:"DELETE",headers:H}); } catch {} },
 };
 
 const storage = {
@@ -436,11 +454,13 @@ function OcclusionCanvas({cardFront,showBack,showOthers}){
 }
 
 // ─── Card Editor ──────────────────────────────────────────────────────────────
-function CardEditor({card,onSave,onCancel}){
+function CardEditor({card,onSave,onCancel,userGroups}){
+  // If userGroups provided, filter GROUPS to only accessible ones (user mode)
+  const availableGroups=userGroups?GROUPS.filter(g=>g.sem>0&&userGroups.includes(g.id)):GROUPS;
   const isNew=!card?.id;
   const initType=!isNew&&isOcclusion(card)?"occlusion":"text";
   const [cardType,setCardType]=useState(initType);
-  const [form,setForm]=useState({front:card?.front||"",back:card?.back||"",groupId:card?.groupId||GROUPS[0].id,num:card?.num||1,chapterId:card?.chapterId||1,packetId:card?.packetId||"prioritaire"});
+  const [form,setForm]=useState({front:card?.front||"",back:card?.back||"",groupId:card?.groupId||(availableGroups[0]?.id||GROUPS[0].id),num:card?.num||1,chapterId:card?.chapterId||1,packetId:card?.packetId||"prioritaire"});
   const [saved,setSaved]=useState(false),[errors,setErrors]=useState({});
   const COLORS=["#e74c3c","#3498db","#2ecc71","#f39c12","#9b59b6","#1abc9c","#e67e22","#e91e63","#00bcd4","#8bc34a"];
   const [image,setImage]=useState(null),[imgW,setImgW]=useState(0),[imgH,setImgH]=useState(0),[zones,setZones]=useState([]),[drawing,setDrawing]=useState(false),[startPos,setStartPos]=useState(null),[currentRect,setCurrentRect]=useState(null);
@@ -459,7 +479,7 @@ function CardEditor({card,onSave,onCancel}){
   const onMouseUp=e=>{if(!drawing)return;e.preventDefault();setDrawing(false);if(currentRect&&currentRect.w>8&&currentRect.h>8){setZones(z=>[...z,{id:`z${Date.now()}`,...currentRect,color:COLORS[z.length%COLORS.length]}]);}setCurrentRect(null);setStartPos(null);};
   const handleFile=e=>{const file=e.target.files[0];if(!file)return;const reader=new FileReader();reader.onload=ev=>{setImage(ev.target.result);setZones([]);setSaved(false);};reader.readAsDataURL(file);};
   const handleSaveOcclusion=()=>{if(!image||zones.length===0)return;const cards=zones.map((zone,i)=>({id:`occ-${Date.now()}-${i}`,front:JSON.stringify({type:"occlusion",image,imgW,imgH,zones,targetZone:zone.id}),back:"__occlusion__",groupId:form.groupId,num:form.num,chapterId:form.chapterId,packetId:form.packetId}));onSave(cards);setSaved(true);};
-  const ClassPanel=()=>(<div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"20px",height:"fit-content"}}><p style={{fontFamily:serif,fontSize:16,margin:"0 0 20px"}}>Classification</p><div style={{display:"flex",flexDirection:"column",gap:20}}><ClassSelector label="Matière" value={form.groupId} onChange={handleGroupChange} options={GROUPS.map(g=>({value:g.id,label:groupLabel(g)}))}/><div style={{borderTop:`1px solid ${C.border}`,paddingTop:18}}><ClassSelector label="Cours" value={form.num} onChange={handleNumChange} options={availNums.map(n=>({value:n,label:`Cours ${n}`}))} columns={Math.min(availNums.length,4)}/></div>{availChapters.length>0&&(<div style={{borderTop:`1px solid ${C.border}`,paddingTop:18}}><ClassSelector label="Chapitre" value={form.chapterId} onChange={v=>setForm(p=>({...p,chapterId:v}))} options={availChapters.map((ch,i)=>({value:i+1,label:`${i+1}. ${ch}`}))} columns={1}/></div>)}<div style={{borderTop:`1px solid ${C.border}`,paddingTop:18}}><ClassSelector label="Paquet" value={form.packetId} onChange={v=>setForm(p=>({...p,packetId:v}))} options={PACKETS.map(pk=>({value:pk.id,label:pk.label,color:pC(pk.id),bg:pB(pk.id)}))} columns={1}/></div></div></div>);
+  const ClassPanel=()=>(<div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"20px",height:"fit-content"}}><p style={{fontFamily:serif,fontSize:16,margin:"0 0 20px"}}>Classification</p><div style={{display:"flex",flexDirection:"column",gap:20}}><ClassSelector label="Matière" value={form.groupId} onChange={handleGroupChange} options={availableGroups.map(g=>({value:g.id,label:groupLabel(g)}))}/><div style={{borderTop:`1px solid ${C.border}`,paddingTop:18}}><ClassSelector label="Cours" value={form.num} onChange={handleNumChange} options={availNums.map(n=>({value:n,label:`Cours ${n}`}))} columns={Math.min(availNums.length,4)}/></div>{availChapters.length>0&&(<div style={{borderTop:`1px solid ${C.border}`,paddingTop:18}}><ClassSelector label="Chapitre" value={form.chapterId} onChange={v=>setForm(p=>({...p,chapterId:v}))} options={availChapters.map((ch,i)=>({value:i+1,label:`${i+1}. ${ch}`}))} columns={1}/></div>)}<div style={{borderTop:`1px solid ${C.border}`,paddingTop:18}}><ClassSelector label="Paquet" value={form.packetId} onChange={v=>setForm(p=>({...p,packetId:v}))} options={PACKETS.map(pk=>({value:pk.id,label:pk.label,color:pC(pk.id),bg:pB(pk.id)}))} columns={1}/></div></div></div>);
   return <div style={{fontFamily:font,background:C.bg,minHeight:"100vh"}}><Nav left={<button onClick={onCancel} style={{fontFamily:font,fontSize:13,background:"none",border:"none",cursor:"pointer",color:C.textMed}}>← Retour</button>} center={isNew?"Nouvelle flashcard":"Modifier"} right={cardType==="text"?<Btn fill onClick={handleSaveText}>{saved?"✓ Enregistré":isNew?"Créer":"Mettre à jour"}</Btn>:zones.length>0?<Btn fill onClick={handleSaveOcclusion}>{saved?`✓ Créées !`:`Générer ${zones.length} carte${zones.length>1?"s":""} →`}</Btn>:null}/>
     <div style={{maxWidth:960,margin:"0 auto",padding:"28px 24px"}}>
       {isNew&&(<div style={{marginBottom:24}}><Lbl>Type de carte</Lbl><div style={{display:"flex",gap:8,marginTop:8}}>{[["text","📝 Texte","Recto / Verso classique"],["occlusion","🖼 Image Occlusion","Masquer des zones sur une image"]].map(([t,lbl,desc])=>(<button key={t} onClick={()=>setCardType(t)} style={{fontFamily:font,fontSize:13,fontWeight:cardType===t?600:400,padding:"12px 20px",cursor:"pointer",borderRadius:8,border:`2px solid ${cardType===t?C.accent:C.border}`,background:cardType===t?C.accentBg:C.surface,color:cardType===t?C.accent:C.textMed,display:"flex",flexDirection:"column",alignItems:"flex-start",gap:3}}><span>{cardType===t&&"✓ "}{lbl}</span><span style={{fontSize:11,fontWeight:400,color:cardType===t?C.accent:C.textLt}}>{desc}</span></button>))}</div></div>)}
@@ -673,8 +693,89 @@ function ShopTab({userGroups,planId,username,cards,progress,settings,onStudy,onS
   );
 }
 
+// ─── MyCardsTab ──────────────────────────────────────────────────────────────
+function MyCardsTab({userCards,onNew,onEdit,onDelete,cards,progress,onStudy,currentUser}){
+  const [delId,setDelId]=useState(null);
+  const grouped=useMemo(()=>{
+    const map={};
+    userCards.forEach(c=>{
+      const key=`${c.groupId}|${c.num}|${c.chapterId}`;
+      if(!map[key])map[key]={groupId:c.groupId,num:c.num,chapterId:c.chapterId,cards:[]};
+      map[key].cards.push(c);
+    });
+    return Object.values(map);
+  },[userCards]);
+
+  const totalDue=userCards.filter(c=>{const p=progress[c.id];return !p?.next||new Date(p.next)<=new Date();}).length;
+
+  return(
+    <div style={{animation:"fadeIn 0.18s ease"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20,flexWrap:"wrap",gap:12}}>
+        <div>
+          <p style={{fontFamily:serif,fontSize:18,margin:"0 0 4px"}}>Mes flashcards personnelles</p>
+          <p style={{fontSize:13,color:C.textMed,margin:0,lineHeight:1.6}}>Cartes que tu crées toi-même · privées · synchronisées sur tous tes appareils</p>
+        </div>
+        <Btn fill onClick={onNew} style={{flexShrink:0}}>+ Créer une carte</Btn>
+      </div>
+
+      {userCards.length===0?(
+        <div style={{border:`1.5px dashed ${C.border}`,borderRadius:12,padding:"48px 24px",textAlign:"center",background:C.surface}}>
+          <p style={{fontSize:36,margin:"0 0 12px"}}>✏️</p>
+          <p style={{fontFamily:serif,fontSize:18,margin:"0 0 8px"}}>Aucune carte personnelle</p>
+          <p style={{fontSize:13,color:C.textMed,margin:"0 0 20px",lineHeight:1.6}}>Crée tes propres flashcards pour compléter les cours officiels.<br/>Elles s'intègreront directement dans tes révisions.</p>
+          <Btn fill onClick={onNew}>Créer ma première carte →</Btn>
+        </div>
+      ):(
+        <>
+          {totalDue>0&&(
+            <div style={{background:C.accentBg,border:`1px solid ${C.accent}20`,borderRadius:10,padding:"12px 18px",marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div><p style={{fontSize:13,color:C.accent,fontWeight:600,margin:"0 0 2px"}}>{totalDue} carte{totalDue>1?"s":""} personnelle{totalDue>1?"s":""} à réviser</p><p style={{fontSize:11,color:C.textMed,margin:0}}>Incluses dans ta révision globale</p></div>
+              <button onClick={()=>onStudy("__user__",null,null,null)} style={{fontFamily:font,fontSize:12,fontWeight:600,padding:"8px 16px",cursor:"pointer",borderRadius:6,border:`1.5px solid ${C.accent}`,background:C.accent,color:"#fff",whiteSpace:"nowrap"}}>Réviser mes cartes →</button>
+            </div>
+          )}
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {userCards.map(card=>{
+              const grp=GROUPS.find(g=>g.id===card.groupId);
+              const chName=getChapters(card.groupId,card.num)[card.chapterId-1];
+              const p=progress[card.id];
+              const isDueNow=!p?.next||new Date(p.next)<=new Date();
+              return(
+                <div key={card.id} style={{background:C.surface,border:`1px solid ${isDueNow?C.accent:C.border}`,borderRadius:8,overflow:"hidden",display:"flex",transition:"box-shadow 0.15s"}} onMouseEnter={e=>e.currentTarget.style.boxShadow="0 2px 12px rgba(0,0,0,0.07)"} onMouseLeave={e=>e.currentTarget.style.boxShadow="none"}>
+                  <div style={{width:4,background:pC(card.packetId),flexShrink:0}}/>
+                  <div style={{flex:1,padding:"12px 16px"}}>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:6}}>
+                      <Tag color={C.textMed} bg={"#f0ece6"} small>✏️ Personnel</Tag>
+                      <Tag color={pC(card.packetId)} bg={pB(card.packetId)} small>{PACKETS.find(p=>p.id===card.packetId)?.label}</Tag>
+                      {grp&&<Tag color={C.textMed} bg={C.bg} small>{grp.label}</Tag>}
+                      <Tag color={C.textMed} bg={C.bg} small>Cours {card.num}</Tag>
+                      {chName&&<Tag color={C.textMed} bg={C.bg} small>Ch.{card.chapterId} {chName}</Tag>}
+                      {isDueNow&&<Tag color={C.accent} bg={C.accentBg} small>À réviser</Tag>}
+                    </div>
+                    {isOcclusion(card)?<p style={{fontFamily:serif,fontSize:13,color:C.textMed,margin:0}}>🖼 Image Occlusion</p>:(
+                      <>
+                        <p style={{fontFamily:serif,fontSize:14,color:C.text,margin:"0 0 2px",lineHeight:1.4}}>{card.front}</p>
+                        <p style={{fontSize:12,color:C.textLt,margin:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{card.back}</p>
+                      </>
+                    )}
+                    <div style={{display:"flex",gap:8,marginTop:10}}>
+                      <Btn small fill onClick={()=>onEdit(card)}>✏ Modifier</Btn>
+                      <Btn small danger onClick={()=>setDelId(card.id)}>Supprimer</Btn>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <p style={{fontSize:11,color:C.textLt,textAlign:"center",margin:"20px 0 0"}}>{userCards.length} carte{userCards.length>1?"s":""} personnelle{userCards.length>1?"s":""} · stockées sur ton compte</p>
+        </>
+      )}
+      {delId&&<Modal onClose={()=>setDelId(null)} width={320}><p style={{fontFamily:serif,fontSize:20,margin:"0 0 8px"}}>Supprimer cette carte ?</p><p style={{fontSize:13,color:C.textMed,margin:"0 0 24px"}}>Action irréversible.</p><div style={{display:"flex",gap:10}}><Btn fill danger onClick={()=>{onDelete(delId);setDelId(null);}}>Supprimer</Btn><Btn onClick={()=>setDelId(null)}>Annuler</Btn></div></Modal>}
+    </div>
+  );
+}
+
 // ─── Dashboard ────────────────────────────────────────────────────────────────
-function Dashboard({currentUser,cards,progress,settings,onStudy,onGlobalStudy,onAdmin,onSettings,onLogout,paymentStatus,onClosePaymentBanner}){
+function Dashboard({currentUser,cards,userCards,progress,settings,onStudy,onGlobalStudy,onAdmin,onSettings,onLogout,onNewUserCard,onEditUserCard,onDeleteUserCard,paymentStatus,onClosePaymentBanner}){
   const isAdmin=currentUser.role==="admin";
   const userGroups=currentUser.plan?.groups||[];
   const currentPlan=PLANS.find(p=>p.id===currentUser.plan?.planId);
@@ -692,6 +793,9 @@ function Dashboard({currentUser,cards,progress,settings,onStudy,onGlobalStudy,on
   const defaultTab=planId==="sem2"?"sem2":planId==="both"?"sem1":planId==="sem1"?"sem1":"prerentree";
   const [activeTab,setActiveTab]=useState(defaultTab);
 
+  // Combine admin cards + user personal cards for study stats
+  const allCards=useMemo(()=>[...cards,...(userCards||[])],[cards,userCards]);
+
   // hasTabAccess: only grants access via full semester/annual plans — individual subject access is in ShopTab only
   const hasTabAccess=useCallback(tab=>{
     if(!tab)return false;
@@ -700,14 +804,16 @@ function Dashboard({currentUser,cards,progress,settings,onStudy,onGlobalStudy,on
   },[isAdmin,planId]);
 
   const tabGroups=useMemo(()=>{const t=TABS.find(t=>t.id===activeTab);return GROUPS.filter(g=>g.sem===t?.sem);},[activeTab]);
-  const visibleIds=isAdmin?[...PRERENTREE_IDS,...ALL]:userGroups;  // GroupBlock with course tabs → chapter rows
+  const visibleIds=isAdmin?[...PRERENTREE_IDS,...ALL]:userGroups;
+
+  // GroupBlock with course tabs → chapter rows (uses allCards for accurate stats)
   function GroupBlock({group}){
     const [activeCours,setActiveCours]=useState(null);
     const chapters=activeCours?getChapters(group.id,activeCours):[];
 
     function PktBtn({chapterId,pk}){
       const col=pC(pk.id),bg=pB(pk.id);
-      const {total,due}=chapterStats(cards,progress,group.id,activeCours,chapterId,pk.id);
+      const {total,due}=chapterStats(allCards,progress,group.id,activeCours,chapterId,pk.id);
       const hasDue=due>0,upToDate=total>0&&!hasDue;
       return <button onClick={()=>total>0&&onStudy(group.id,activeCours,chapterId,pk.id)} style={{fontFamily:font,fontSize:11,fontWeight:500,padding:"6px 10px",cursor:total>0?"pointer":"default",borderRadius:6,border:`1.5px solid ${hasDue?col:upToDate?C.border:"#e8e5e0"}`,background:hasDue?bg:C.surface,color:hasDue?col:upToDate?C.textLt:"#c0bbb5",display:"flex",flexDirection:"column",alignItems:"center",gap:2,minWidth:78,transition:"border-color 0.15s"}} onMouseEnter={e=>{if(total>0)e.currentTarget.style.borderColor=col;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=hasDue?col:upToDate?C.border:"#e8e5e0";}}><span style={{fontSize:10}}>{pk.label}</span><span style={{fontSize:10,fontWeight:400}}>{total===0?"vide":hasDue?`${due} carte${due>1?"s":""}` :"✓ à jour"}</span></button>;
     }
@@ -715,19 +821,19 @@ function Dashboard({currentUser,cards,progress,settings,onStudy,onGlobalStudy,on
     return <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden",marginBottom:12}}>
       <div style={{padding:"11px 18px",borderBottom:`1px solid ${C.border}`,background:C.bg}}><p style={{fontFamily:serif,fontSize:15,margin:0}}>{group.label}</p></div>
       <div style={{display:"flex",gap:8,padding:"10px 18px",flexWrap:"wrap",borderBottom:activeCours?`1px solid ${C.border}`:"none",background:C.surface}}>
-        {group.nums.map(n=>{const active=activeCours===n;const due=courseDueCount(cards,progress,group.id,n);return <button key={n} onClick={()=>setActiveCours(active?null:n)} style={{fontFamily:font,fontSize:12,fontWeight:active?600:400,padding:"8px 16px",cursor:"pointer",borderRadius:7,border:`1.5px solid ${active?C.accent:due>0?C.good:C.border}`,background:active?C.accentBg:due>0?C.goodBg:"transparent",color:active?C.accent:due>0?C.good:C.textMed,display:"flex",alignItems:"center",gap:7,transition:"all 0.15s"}}><span>Cours {n}</span>{due>0&&!active&&<span style={{fontFamily:mono,fontSize:8,fontWeight:700,padding:"1px 5px",borderRadius:10,background:C.good,color:"#fff"}}>{due}</span>}<span style={{fontSize:10,opacity:0.6}}>{active?"▲":"▼"}</span></button>;})}
+        {group.nums.map(n=>{const active=activeCours===n;const due=courseDueCount(allCards,progress,group.id,n);return <button key={n} onClick={()=>setActiveCours(active?null:n)} style={{fontFamily:font,fontSize:12,fontWeight:active?600:400,padding:"8px 16px",cursor:"pointer",borderRadius:7,border:`1.5px solid ${active?C.accent:due>0?C.good:C.border}`,background:active?C.accentBg:due>0?C.goodBg:"transparent",color:active?C.accent:due>0?C.good:C.textMed,display:"flex",alignItems:"center",gap:7,transition:"all 0.15s"}}><span>Cours {n}</span>{due>0&&!active&&<span style={{fontFamily:mono,fontSize:8,fontWeight:700,padding:"1px 5px",borderRadius:10,background:C.good,color:"#fff"}}>{due}</span>}<span style={{fontSize:10,opacity:0.6}}>{active?"▲":"▼"}</span></button>;})}
       </div>
       {activeCours&&(
         <div style={{animation:"fadeIn 0.18s ease"}}>
           {chapters.length===0?(<div style={{padding:"14px 18px"}}><p style={{fontSize:12,color:C.textLt,margin:0}}>Pas encore de chapitres définis pour ce cours.</p></div>):(
-            chapters.map((chName,i)=>{const chIdx=i+1;const chDue=PACKETS.reduce((acc,pk)=>acc+chapterStats(cards,progress,group.id,activeCours,chIdx,pk.id).due,0);return <div key={chIdx} style={{display:"flex",alignItems:"center",padding:"9px 18px",gap:12,borderTop:`1px solid ${C.border}`,flexWrap:"wrap"}}><div style={{display:"flex",alignItems:"center",gap:8,flex:1,minWidth:180}}><span style={{fontFamily:mono,fontSize:9,letterSpacing:1,color:C.textLt,minWidth:18,flexShrink:0}}>{chIdx}</span><span style={{fontFamily:font,fontSize:13,color:chDue>0?C.text:C.textMed,fontWeight:chDue>0?500:400}}>{chName}</span>{chDue>0&&<span style={{fontFamily:mono,fontSize:8,fontWeight:700,padding:"1px 5px",borderRadius:10,background:C.accent,color:"#fff",flexShrink:0}}>{chDue}</span>}</div><div style={{display:"flex",gap:6,flexShrink:0}}>{PACKETS.map(pk=><PktBtn key={pk.id} chapterId={chIdx} pk={pk}/>)}</div></div>;})
+            chapters.map((chName,i)=>{const chIdx=i+1;const chDue=PACKETS.reduce((acc,pk)=>acc+chapterStats(allCards,progress,group.id,activeCours,chIdx,pk.id).due,0);const userChCards=(userCards||[]).filter(c=>c.groupId===group.id&&c.num===activeCours&&c.chapterId===chIdx).length;return <div key={chIdx} style={{display:"flex",alignItems:"center",padding:"9px 18px",gap:12,borderTop:`1px solid ${C.border}`,flexWrap:"wrap"}}><div style={{display:"flex",alignItems:"center",gap:8,flex:1,minWidth:180}}><span style={{fontFamily:mono,fontSize:9,letterSpacing:1,color:C.textLt,minWidth:18,flexShrink:0}}>{chIdx}</span><span style={{fontFamily:font,fontSize:13,color:chDue>0?C.text:C.textMed,fontWeight:chDue>0?500:400}}>{chName}</span>{chDue>0&&<span style={{fontFamily:mono,fontSize:8,fontWeight:700,padding:"1px 5px",borderRadius:10,background:C.accent,color:"#fff",flexShrink:0}}>{chDue}</span>}{userChCards>0&&<span style={{fontFamily:mono,fontSize:8,padding:"1px 5px",borderRadius:10,background:"#f0ece6",color:C.textMed,flexShrink:0}}>+{userChCards} perso</span>}</div><div style={{display:"flex",gap:6,flexShrink:0}}>{PACKETS.map(pk=><PktBtn key={pk.id} chapterId={chIdx} pk={pk}/>)}</div></div>;})
           )}
         </div>
       )}
     </div>;
   }
 
-  // tabHasAccess: safe for undefined (when activeTab="shop")
+  // tabHasAccess: safe for undefined (when activeTab="shop" or "mes-cartes")
   const tabHasAccess=hasTabAccess(TABS.find(t=>t.id===activeTab));
 
   return <div style={{fontFamily:font,background:C.bg,minHeight:"100vh",color:C.text,paddingTop:paymentStatus?56:0}}>
@@ -752,11 +858,11 @@ function Dashboard({currentUser,cards,progress,settings,onStudy,onGlobalStudy,on
         <p style={{fontFamily:serif,fontSize:18,margin:"0 0 3px"}}>Révision globale</p>
         <p style={{fontSize:12,color:C.textMed,margin:"0 0 16px"}}>Toutes vos matières en une session</p>
         <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10}}>
-          {gModes.map(mode=>{const count=globalDue(cards,progress,visibleIds,settings,mode.id),hasCards=count>0;return<button key={String(mode.id)} onClick={()=>hasCards&&onGlobalStudy(mode.id)} style={{fontFamily:font,padding:"14px 10px",cursor:hasCards?"pointer":"default",borderRadius:8,border:`1.5px solid ${hasCards?mode.col:C.border}`,background:hasCards?mode.bg:"transparent",color:hasCards?mode.col:C.textLt,display:"flex",flexDirection:"column",alignItems:"center",gap:6,transition:"transform 0.15s"}} onMouseEnter={e=>{if(hasCards)e.currentTarget.style.transform="translateY(-2px)";}} onMouseLeave={e=>{e.currentTarget.style.transform="none";}}><span style={{fontSize:11,fontWeight:600,textAlign:"center",lineHeight:1.3}}>{mode.label}</span><span style={{fontSize:18,fontWeight:300}}>{count}</span><span style={{fontSize:10,opacity:0.7}}>carte{count!==1?"s":""}</span></button>;})}
+          {gModes.map(mode=>{const count=globalDue(allCards,progress,visibleIds,settings,mode.id),hasCards=count>0;return<button key={String(mode.id)} onClick={()=>hasCards&&onGlobalStudy(mode.id)} style={{fontFamily:font,padding:"14px 10px",cursor:hasCards?"pointer":"default",borderRadius:8,border:`1.5px solid ${hasCards?mode.col:C.border}`,background:hasCards?mode.bg:"transparent",color:hasCards?mode.col:C.textLt,display:"flex",flexDirection:"column",alignItems:"center",gap:6,transition:"transform 0.15s"}} onMouseEnter={e=>{if(hasCards)e.currentTarget.style.transform="translateY(-2px)";}} onMouseLeave={e=>{e.currentTarget.style.transform="none";}}><span style={{fontSize:11,fontWeight:600,textAlign:"center",lineHeight:1.3}}>{mode.label}</span><span style={{fontSize:18,fontWeight:300}}>{count}</span><span style={{fontSize:10,opacity:0.7}}>carte{count!==1?"s":""}</span></button>;})}
         </div>
       </div>
 
-      {/* Onglets semestres + achat par matière */}
+      {/* Onglets */}
       <div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap"}}>
         {TABS.map(tab=>{
           const active=activeTab===tab.id;
@@ -766,10 +872,13 @@ function Dashboard({currentUser,cards,progress,settings,onStudy,onGlobalStudy,on
           </button>;
         })}
         {!isAdmin&&<button onClick={()=>setActiveTab("shop")} style={{fontFamily:font,fontSize:13,fontWeight:activeTab==="shop"?600:400,padding:"8px 20px",cursor:"pointer",borderRadius:8,border:`1.5px solid ${activeTab==="shop"?C.imp:C.border}`,background:activeTab==="shop"?C.impBg:"transparent",color:activeTab==="shop"?C.imp:C.textMed,display:"flex",alignItems:"center",gap:6}}>🛒 Acheter par matière</button>}
+        {!isAdmin&&<button onClick={()=>setActiveTab("mes-cartes")} style={{fontFamily:font,fontSize:13,fontWeight:activeTab==="mes-cartes"?600:400,padding:"8px 20px",cursor:"pointer",borderRadius:8,border:`1.5px solid ${activeTab==="mes-cartes"?"#7c3aed":C.border}`,background:activeTab==="mes-cartes"?"#f5f3ff":"transparent",color:activeTab==="mes-cartes"?"#7c3aed":C.textMed,display:"flex",alignItems:"center",gap:6}}>✏️ Mes flashcards{(userCards||[]).length>0&&<span style={{fontFamily:mono,fontSize:8,fontWeight:700,padding:"1px 6px",borderRadius:10,background:"#7c3aed",color:"#fff"}}>{(userCards||[]).length}</span>}</button>}
       </div>
 
-      {/* shop tab or semester tab content */}
-      {activeTab==="shop"&&!isAdmin?(
+      {/* Tab content */}
+      {activeTab==="mes-cartes"&&!isAdmin?(
+        <MyCardsTab userCards={userCards||[]} onNew={onNewUserCard} onEdit={onEditUserCard} onDelete={onDeleteUserCard} cards={cards} progress={progress} onStudy={onStudy} currentUser={currentUser}/>
+      ):activeTab==="shop"&&!isAdmin?(
         <ShopTab userGroups={userGroups} planId={planId} username={currentUser.username} cards={cards} progress={progress} settings={settings} onStudy={onStudy} onShowPacks={()=>setShowUpgrade(true)}/>
       ):tabHasAccess?(
         <div>
@@ -802,7 +911,14 @@ function StudyView({label,queue,onRate,onBack,settings,isAdmin}){
     <Nav left={<button onClick={onBack} style={{fontFamily:font,fontSize:13,background:"none",border:"none",cursor:"pointer",color:C.textMed}}>← Retour</button>} center={label} right={<span style={{fontSize:12,color:C.textLt}}>{idx+1} / {localQ.length}</span>}/>
     <div style={{height:3,background:C.border}}><div style={{height:3,background:col,width:`${(idx/Math.max(1,localQ.length))*100}%`,transition:"width 0.3s"}}/></div>
     <div style={{maxWidth:560,margin:"0 auto",padding:"28px 24px 0"}}>
-      <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:18}}><Tag color={col} bg={pB(card.packetId)}>{PACKETS.find(p=>p.id===card.packetId)?.label}</Tag><Tag color={C.accent} bg={C.accentBg}>{grp?.label}</Tag><Tag color={C.textMed} bg={C.bg}>Cours {card.num}</Tag>{chName&&<Tag color={C.textMed} bg={C.bg}>Ch.{card.chapterId} {chName}</Tag>}<Tag color={C.textLt} bg={C.bg}>{stateLabel(null)}</Tag></div>
+      <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:18}}>
+        <Tag color={col} bg={pB(card.packetId)}>{PACKETS.find(p=>p.id===card.packetId)?.label}</Tag>
+        <Tag color={C.accent} bg={C.accentBg}>{grp?.label}</Tag>
+        <Tag color={C.textMed} bg={C.bg}>Cours {card.num}</Tag>
+        {chName&&<Tag color={C.textMed} bg={C.bg}>Ch.{card.chapterId} {chName}</Tag>}
+        {card.isUserCard&&<Tag color={"#7c3aed"} bg={"#f5f3ff"}>✏️ Personnel</Tag>}
+        <Tag color={C.textLt} bg={C.bg}>{stateLabel(null)}</Tag>
+      </div>
       {isOcclusion(card)?(
         <div style={{marginBottom:22}}>
           <div style={{background:C.surface,border:`1.5px solid ${showBack?col:C.border}`,borderRadius:12,padding:"16px 20px",transition:"border-color 0.3s"}}>
@@ -864,6 +980,8 @@ function Landing({onBack,onRegister}){
 // ─── App ──────────────────────────────────────────────────────────────────────
 function App(){
   const [view,setView]=useState("loading"),[currentUser,setCurrentUser]=useState(null),[cards,setCards]=useState([]),[prog,setProg]=useState({}),[settings,setSettings]=useState(DEFAULT_SETTINGS),[accounts,setAccounts]=useState([]),[studyCtx,setStudyCtx]=useState(null),[paymentStatus,setPaymentStatus]=useState(null);
+  const [userCards,setUserCards]=useState([]); // Personal cards for the logged-in user
+  const [userCardEditor,setUserCardEditor]=useState(null); // null=hidden, false=new, card=edit
 
   useEffect(()=>{
     async function init(){
@@ -1011,6 +1129,29 @@ function App(){
   const handleDeleteUser=useCallback(async username=>{await supa.deleteAccount(username);setAccounts(p=>p.filter(a=>a.username!==username));},[]);
   const handleRegister=useCallback(async newAcc=>{await supa.upsertAccount(newAcc);setAccounts(p=>[...p,{...newAcc,plan_id:newAcc.planId}]);const u={username:newAcc.username,role:"student",plan:{planId:newAcc.planId,groups:newAcc.groups}};setProg({});setCurrentUser(u);storage.set("mx6-session",u);},[]);
 
+  // ── User personal cards — fetched from user_cards table, private per user ──
+  useEffect(()=>{
+    if(!currentUser||currentUser.role==="admin"){setUserCards([]);return;}
+    supa.getUserCards(currentUser.username).then(uc=>setUserCards(uc||[])).catch(()=>{});
+  },[currentUser?.username]);
+
+  const handleSaveUserCard=useCallback(async(cardOrCards)=>{
+    const list=Array.isArray(cardOrCards)?cardOrCards:[cardOrCards];
+    for(const card of list){
+      const c={...card,
+        id:card.id||`u-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
+        username:currentUser.username,isUserCard:true};
+      await supa.upsertUserCard(c);
+      setUserCards(prev=>prev.find(x=>x.id===c.id)?prev.map(x=>x.id===c.id?c:x):[...prev,c]);
+    }
+    setUserCardEditor(null);
+  },[currentUser]);
+
+  const handleDeleteUserCard=useCallback(async id=>{
+    await supa.deleteUserCard(id);
+    setUserCards(prev=>prev.filter(c=>c.id!==id));
+  },[]);
+
   // ── Background Supabase sync on login: picks up webhook-applied group changes ──
   useEffect(()=>{
     if(!currentUser||currentUser.role==="admin")return;
@@ -1042,22 +1183,30 @@ function App(){
     return()=>clearTimeout(timer);
   },[currentUser?.username]);
 
+  const allCards=useMemo(()=>[...cards,...userCards],[cards,userCards]);
+
   const startStudy=useCallback((gid,num,chapterId,pkId)=>{
-    const queue=buildQueue(cards.filter(c=>c.groupId===gid&&c.num===num&&c.chapterId===chapterId&&c.packetId===pkId),prog,settings);
+    // Special case: study all personal user cards
+    if(gid==="__user__"){
+      const queue=buildQueue(userCards,prog,settings);
+      if(!queue.length){alert("Aucune carte personnelle à réviser !");return;}
+      setStudyCtx({label:"Mes flashcards personnelles",queue});setView("study");return;
+    }
+    const queue=buildQueue(allCards.filter(c=>c.groupId===gid&&c.num===num&&c.chapterId===chapterId&&c.packetId===pkId),prog,settings);
     if(!queue.length){alert("Aucune carte à réviser !");return;}
     const chName=getChapters(gid,num)[chapterId-1]||`Ch. ${chapterId}`;
     const grp=GROUPS.find(g=>g.id===gid);
     setStudyCtx({label:`${grp?.label} · Cours ${num} · ${chName} · ${PACKETS.find(p=>p.id===pkId)?.label}`,queue});
     setView("study");
-  },[cards,prog,settings]);
+  },[allCards,userCards,prog,settings]);
 
   const startGlobalStudy=useCallback(pkId=>{
     const ids=currentUser?.plan?.groups||[];
-    const queue=buildQueue(cards.filter(c=>ids.includes(c.groupId)&&(!pkId||c.packetId===pkId)),prog,settings);
+    const queue=buildQueue(allCards.filter(c=>ids.includes(c.groupId)&&(!pkId||c.packetId===pkId)),prog,settings);
     if(!queue.length){alert("Aucune carte à réviser !");return;}
     setStudyCtx({label:pkId?`Révision globale · ${PACKETS.find(p=>p.id===pkId)?.label}`:"Révision globale · Toutes",queue});
     setView("study");
-  },[cards,prog,currentUser,settings]);
+  },[allCards,prog,currentUser,settings]);
 
   const handleRate=useCallback(async(card,rating)=>{const np=computeNext(prog[card.id],rating,settings);saveProg({...prog,[card.id]:np});return np;},[prog,saveProg,settings]);
 
@@ -1065,7 +1214,9 @@ function App(){
   if(view==="landing")   return <Landing onBack={()=>setView("login")} onRegister={()=>setView("register")}/>;
   if(view==="login")     return <LoginView onLogin={handleLogin} onShowLanding={()=>setView("landing")} onRegister={()=>setView("register")} accounts={accounts} onPasswordReset={(em,pwd)=>setAccounts(p=>p.map(a=>a.username===em?{...a,password:pwd}:a))}/>;
   if(view==="register")  return <RegisterView onRegister={acc=>{handleRegister(acc);setView("dashboard");}} onBack={()=>setView("login")} accounts={accounts}/>;
-  if(view==="dashboard"&&currentUser) return <Dashboard currentUser={currentUser} cards={cards} progress={prog} settings={settings} onStudy={startStudy} onGlobalStudy={startGlobalStudy} onAdmin={()=>setView("admin")} onSettings={()=>setView("settings")} onLogout={logout} paymentStatus={paymentStatus} onClosePaymentBanner={()=>setPaymentStatus(null)}/>;
+  // User card editor: CardEditor in user mode (creates to user_cards table)
+  if(userCardEditor!==null&&currentUser?.role!=="admin")return <CardEditor card={userCardEditor||null} onSave={handleSaveUserCard} onCancel={()=>setUserCardEditor(null)} userGroups={currentUser?.plan?.groups||[]}/>;
+  if(view==="dashboard"&&currentUser) return <Dashboard currentUser={currentUser} cards={cards} userCards={userCards} progress={prog} settings={settings} onStudy={startStudy} onGlobalStudy={startGlobalStudy} onAdmin={()=>setView("admin")} onSettings={()=>setView("settings")} onLogout={logout} onNewUserCard={()=>setUserCardEditor(false)} onEditUserCard={c=>setUserCardEditor(c)} onDeleteUserCard={handleDeleteUserCard} paymentStatus={paymentStatus} onClosePaymentBanner={()=>setPaymentStatus(null)}/>;
   if(view==="study"&&studyCtx) return <StudyView label={studyCtx.label} queue={studyCtx.queue} onRate={handleRate} onBack={()=>setView("dashboard")} settings={settings} isAdmin={currentUser?.role==="admin"}/>;
   if(view==="admin")     return <AdminView cards={cards} accounts={accounts} onSaveCard={handleSaveCard} onDeleteCard={handleDeleteCard} onSaveUser={handleSaveUser} onDeleteUser={handleDeleteUser} onBack={()=>setView("dashboard")}/>;
   if(view==="settings")  return <SettingsView settings={settings} onSave={saveSet} onBack={()=>setView("dashboard")}/>;
