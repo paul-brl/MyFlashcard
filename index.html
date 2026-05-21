@@ -825,8 +825,47 @@ function Dashboard({currentUser,cards,userCards,progress,settings,onStudy,onGlob
       </div>
       {activeCours&&(
         <div style={{animation:"fadeIn 0.18s ease"}}>
+          {/* ── Cours complet button ── */}
+          {(()=>{
+            const courseTotal=allCards.filter(c=>c.groupId===group.id&&c.num===activeCours).length;
+            if(!courseTotal)return null;
+            return(
+              <div style={{padding:"10px 18px",borderBottom:`1px solid ${C.border}`,background:"#faf8ff",display:"flex",justifyContent:"space-between",alignItems:"center",gap:12}}>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{fontFamily:mono,fontSize:9,letterSpacing:1,color:"#7c3aed",textTransform:"uppercase"}}>Cours {activeCours} complet</span>
+                  <span style={{fontFamily:mono,fontSize:9,color:"#9d79d6"}}>{courseTotal} carte{courseTotal>1?"s":""} · toutes les matières · dans l'ordre</span>
+                </div>
+                <button onClick={()=>onStudy(group.id,activeCours,"__course__","__course__")} style={{fontFamily:font,fontSize:11,fontWeight:600,padding:"6px 14px",cursor:"pointer",borderRadius:6,border:"1.5px solid #7c3aed",background:"#ede9fe",color:"#7c3aed",whiteSpace:"nowrap",flexShrink:0}}>Tout réviser →</button>
+              </div>
+            );
+          })()}
           {chapters.length===0?(<div style={{padding:"14px 18px"}}><p style={{fontSize:12,color:C.textLt,margin:0}}>Pas encore de chapitres définis pour ce cours.</p></div>):(
-            chapters.map((chName,i)=>{const chIdx=i+1;const chDue=PACKETS.reduce((acc,pk)=>acc+chapterStats(allCards,progress,group.id,activeCours,chIdx,pk.id).due,0);const userChCards=(userCards||[]).filter(c=>c.groupId===group.id&&c.num===activeCours&&c.chapterId===chIdx).length;return <div key={chIdx} style={{display:"flex",alignItems:"center",padding:"9px 18px",gap:12,borderTop:`1px solid ${C.border}`,flexWrap:"wrap"}}><div style={{display:"flex",alignItems:"center",gap:8,flex:1,minWidth:180}}><span style={{fontFamily:mono,fontSize:9,letterSpacing:1,color:C.textLt,minWidth:18,flexShrink:0}}>{chIdx}</span><span style={{fontFamily:font,fontSize:13,color:chDue>0?C.text:C.textMed,fontWeight:chDue>0?500:400}}>{chName}</span>{chDue>0&&<span style={{fontFamily:mono,fontSize:8,fontWeight:700,padding:"1px 5px",borderRadius:10,background:C.accent,color:"#fff",flexShrink:0}}>{chDue}</span>}{userChCards>0&&<span style={{fontFamily:mono,fontSize:8,padding:"1px 5px",borderRadius:10,background:"#f0ece6",color:C.textMed,flexShrink:0}}>+{userChCards} perso</span>}</div><div style={{display:"flex",gap:6,flexShrink:0}}>{PACKETS.map(pk=><PktBtn key={pk.id} chapterId={chIdx} pk={pk}/>)}</div></div>;})
+            chapters.map((chName,i)=>{
+              const chIdx=i+1;
+              const chDue=PACKETS.reduce((acc,pk)=>acc+chapterStats(allCards,progress,group.id,activeCours,chIdx,pk.id).due,0);
+              const chTotal=PACKETS.reduce((acc,pk)=>acc+chapterStats(allCards,progress,group.id,activeCours,chIdx,pk.id).total,0);
+              const userChCards=(userCards||[]).filter(c=>c.groupId===group.id&&c.num===activeCours&&c.chapterId===chIdx).length;
+              return(
+                <div key={chIdx} style={{display:"flex",alignItems:"center",padding:"9px 18px",gap:12,borderTop:`1px solid ${C.border}`,flexWrap:"wrap"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,flex:1,minWidth:180}}>
+                    <span style={{fontFamily:mono,fontSize:9,letterSpacing:1,color:C.textLt,minWidth:18,flexShrink:0}}>{chIdx}</span>
+                    <span style={{fontFamily:font,fontSize:13,color:chDue>0?C.text:C.textMed,fontWeight:chDue>0?500:400}}>{chName}</span>
+                    {chDue>0&&<span style={{fontFamily:mono,fontSize:8,fontWeight:700,padding:"1px 5px",borderRadius:10,background:C.accent,color:"#fff",flexShrink:0}}>{chDue}</span>}
+                    {userChCards>0&&<span style={{fontFamily:mono,fontSize:8,padding:"1px 5px",borderRadius:10,background:"#f0ece6",color:C.textMed,flexShrink:0}}>+{userChCards} perso</span>}
+                  </div>
+                  <div style={{display:"flex",gap:5,flexShrink:0,flexWrap:"wrap"}}>
+                    {PACKETS.map(pk=><PktBtn key={pk.id} chapterId={chIdx} pk={pk}/>)}
+                    {/* ── Tout (chapter) button ── */}
+                    {chTotal>0&&(
+                      <button onClick={()=>onStudy(group.id,activeCours,chIdx,"__all__")} style={{fontFamily:font,fontSize:11,fontWeight:600,padding:"6px 10px",cursor:"pointer",borderRadius:6,border:"1.5px solid #7c3aed",background:"#ede9fe",color:"#7c3aed",display:"flex",flexDirection:"column",alignItems:"center",gap:2,minWidth:64}} title="Toutes les cartes de ce chapitre dans l'ordre">
+                        <span style={{fontSize:10}}>Tout</span>
+                        <span style={{fontSize:10,fontWeight:400}}>{chTotal} carte{chTotal>1?"s":""}</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })
           )}
         </div>
       )}
@@ -1186,16 +1225,29 @@ function App(){
   const allCards=useMemo(()=>[...cards,...userCards],[cards,userCards]);
 
   const startStudy=useCallback((gid,num,chapterId,pkId)=>{
-    // Special case: study all personal user cards
+    // Personal cards mode
     if(gid==="__user__"){
       const queue=buildQueue(userCards,prog,settings);
       if(!queue.length){alert("Aucune carte personnelle à réviser !");return;}
       setStudyCtx({label:"Mes flashcards personnelles",queue});setView("study");return;
     }
+    const grp=GROUPS.find(g=>g.id===gid);
+    // "Tout" (chapter) or "Cours complet" — ALL cards in insertion order, no SRS filtering
+    if(pkId==="__all__"||pkId==="__course__"){
+      const isCourse=pkId==="__course__";
+      const filtered=allCards.filter(c=>c.groupId===gid&&c.num===num&&(isCourse||c.chapterId===chapterId));
+      if(!filtered.length){alert("Aucune carte dans cette sélection !");return;}
+      const chName=!isCourse&&chapterId?getChapters(gid,num)[chapterId-1]:"";
+      const label=isCourse
+        ?`${grp?.label} · Cours ${num} · Cours complet (${filtered.length} cartes)`
+        :`${grp?.label} · Cours ${num} · ${chName} · Tout (${filtered.length} cartes)`;
+      setStudyCtx({label,queue:filtered}); // All cards in order — no SRS buildQueue
+      setView("study");return;
+    }
+    // Normal SRS study (only due cards)
     const queue=buildQueue(allCards.filter(c=>c.groupId===gid&&c.num===num&&c.chapterId===chapterId&&c.packetId===pkId),prog,settings);
     if(!queue.length){alert("Aucune carte à réviser !");return;}
     const chName=getChapters(gid,num)[chapterId-1]||`Ch. ${chapterId}`;
-    const grp=GROUPS.find(g=>g.id===gid);
     setStudyCtx({label:`${grp?.label} · Cours ${num} · ${chName} · ${PACKETS.find(p=>p.id===pkId)?.label}`,queue});
     setView("study");
   },[allCards,userCards,prog,settings]);
