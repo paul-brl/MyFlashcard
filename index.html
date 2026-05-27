@@ -93,10 +93,11 @@ const supa = {
   getUserCards: async (username) => {
     try {
       const r = await fetch(`${SUPA_URL}/rest/v1/user_cards?username=eq.${encodeURIComponent(username)}&select=*`, { headers: H });
+      if (!r.ok) return null; // HTTP error: table might not exist, auth error, etc.
       const d = await r.json();
-      if (!Array.isArray(d)) return [];
+      if (!Array.isArray(d)) return null; // Supabase returned an error object
       return d.map(c => ({ id:c.id, front:c.front, back:c.back, groupId:c.group_id, num:c.num, chapterId:c.chapter_id||1, packetId:c.packet_id, username:c.username, isUserCard:true, integrated:c.integrated||false }));
-    } catch { return []; }
+    } catch { return null; } // Network error
   },
   upsertUserCard: async (card) => {
     try {
@@ -1457,14 +1458,28 @@ function App(){
   const handleDeleteUser=useCallback(async username=>{await supa.deleteAccount(username);setAccounts(p=>p.filter(a=>a.username!==username));},[]);
   const handleRegister=useCallback(async newAcc=>{await supa.upsertAccount(newAcc);setAccounts(p=>[...p,{...newAcc,plan_id:newAcc.planId}]);const u={username:newAcc.username,role:"student",plan:{planId:newAcc.planId,groups:newAcc.groups}};setProg({});setCurrentUser(u);storage.set("mx6-session",u);},[]);
 
-  // ── User personal cards — fetched from user_cards table, private per user ──
+  // ── User personal cards — smart merge between Supabase and localStorage cache ──
   useEffect(()=>{
     if(!currentUser||currentUser.role==="admin"){setUserCards([]);return;}
+    const cached=mergeIntegrated(getUCache(currentUser.username),currentUser.username);
+    // Show cache immediately while Supabase loads
+    if(cached.length>0)setUserCards(cached);
+
     supa.getUserCards(currentUser.username).then(uc=>{
-      const merged=mergeIntegrated(uc||[],currentUser.username);
+      if(uc===null){
+        // Supabase error (table might not exist yet, or network issue)
+        // → keep whatever we have (cache or already-set state), don't overwrite
+        console.warn("user_cards fetch failed — using localStorage cache");
+        return;
+      }
+      // Supabase succeeded: merge Supabase cards with any cache-only cards
+      // (cache might have cards pending Supabase sync)
+      const supaIds=new Set(uc.map(c=>c.id));
+      const cacheExtras=cached.filter(c=>!supaIds.has(c.id));
+      const merged=mergeIntegrated([...uc,...cacheExtras],currentUser.username);
       setUserCards(merged);
-      setUCache(currentUser.username,merged); // Update instant-load cache
-    }).catch(()=>{});
+      setUCache(currentUser.username,merged); // Update cache with authoritative data
+    });
   },[currentUser?.username]);
 
   const handleSaveUserCard=useCallback(async(cardOrCards)=>{
@@ -1474,11 +1489,16 @@ function App(){
       const c={...card,
         id:card.id||`u-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
         username:currentUser.username,isUserCard:true,integrated:card.integrated||false};
-      await supa.upsertUserCard(c);
       newCards=newCards.find(x=>x.id===c.id)?newCards.map(x=>x.id===c.id?c:x):[...newCards,c];
     }
+    // Persist to localStorage FIRST (survives even if Supabase fails)
     setUserCards(newCards);
-    setUCache(currentUser.username,newCards); // Persist cache
+    setUCache(currentUser.username,newCards);
+    // Then persist to Supabase (async, best-effort)
+    for(const card of list){
+      const c=newCards.find(x=>x.id===card.id)||card;
+      supa.upsertUserCard(c).catch(()=>{});
+    }
     setUserCardEditor(null);
   },[currentUser,userCards]);
 
@@ -1528,16 +1548,17 @@ function App(){
 
   const handleToggleIntegration=useCallback(async(card)=>{
     const updated={...card,integrated:!card.integrated};
-    await supa.upsertUserCard(updated); // Supabase (primary)
-    // localStorage fallback (works even if Supabase integrated column missing)
+    // Persist to localStorage FIRST (survives even if Supabase fails / column missing)
     const ids=getIntegratedIds(currentUser.username);
     updated.integrated?ids.add(card.id):ids.delete(card.id);
     saveIntegratedIds(currentUser.username,ids);
     setUserCards(prev=>{
       const newCards=prev.map(c=>c.id===card.id?updated:c);
-      setUCache(currentUser.username,newCards); // Update instant cache
+      setUCache(currentUser.username,newCards);
       return newCards;
     });
+    // Then persist to Supabase (async, best-effort — fails silently if column missing)
+    supa.upsertUserCard(updated).catch(()=>{});
   },[currentUser]);
 
   // Study personal cards only (from MyCardsTab) — uses userCards, not allCards
