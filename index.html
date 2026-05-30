@@ -325,7 +325,8 @@ function isNew(p){return !p||p.state==="new";}
 function stateLabel(p){if(!p||p.state==="new")return"Nouveau";if(p.state==="learning")return"Apprentissage";if(p.state==="relearning")return"Réapprentissage";return`Révision · J+${p.interval}`;}
 function buildQueue(cardList,prog,settings){
   const {dailyGroups,dailyPackets,maxReviewsPerDay}=settings;
-  return cardList.filter(c=>{const p=prog[c.id];if(!isDue(p))return false;if(isNew(p)){if(dailyGroups.length>0&&!dailyGroups.includes(c.groupId))return false;if(dailyPackets.length>0&&!dailyPackets.includes(c.packetId))return false;}return true;}).slice(0,maxReviewsPerDay);
+  return cardList.filter(c=>{const p=prog[c.id];if(p?.buried)return false; // Skip buried cards
+  if(!isDue(p))return false;if(isNew(p)){if(dailyGroups.length>0&&!dailyGroups.includes(c.groupId))return false;if(dailyPackets.length>0&&!dailyPackets.includes(c.packetId))return false;}return true;}).slice(0,maxReviewsPerDay);
 }
 function chapterStats(cards,prog,gid,num,chId,pkId){
   const l=cards.filter(c=>c.groupId===gid&&c.num===num&&c.chapterId===chId&&c.packetId===pkId);
@@ -818,7 +819,7 @@ function ShopTab({userGroups,planId,username,cards,progress,settings,onStudy,onS
 }
 
 // ─── StatsTab ─────────────────────────────────────────────────────────────────
-function StatsTab({username}){
+function StatsTab({username,progress,allCards,onUnbury}){
   const stats=useMemo(()=>getStats(username),[username]);
   const today=dateKey();
   const todayCards=stats.days[today]?.cards||0;
@@ -828,6 +829,12 @@ function StatsTab({username}){
   const totalCorrect=stats.total.correct;
   const successRate=totalCards>0?Math.round(totalCorrect/totalCards*100):0;
   const totalSeconds=stats.total.seconds;
+
+  // Buried cards: cards where progress[id].buried === true
+  const buriedCards=useMemo(()=>{
+    if(!progress||!allCards)return[];
+    return allCards.filter(c=>progress[c.id]?.buried===true);
+  },[progress,allCards]);
 
   // Flame display
   const flameCount=Math.min(streak,10);
@@ -953,6 +960,42 @@ function StatsTab({username}){
             </div>
           </div>
         </>
+      )}
+
+      {/* ── Cartes enfouies ── */}
+      {buriedCards.length>0&&(
+        <div style={{marginTop:24,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden"}}>
+          <div style={{padding:"14px 18px",borderBottom:`1px solid ${C.border}`,background:C.bg,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <span style={{fontSize:16}}>🙈</span>
+              <p style={{fontFamily:serif,fontSize:15,margin:0}}>Cartes enfouies</p>
+              <span style={{fontFamily:mono,fontSize:9,padding:"2px 7px",borderRadius:10,background:"#374151",color:"#fff",fontWeight:700}}>{buriedCards.length}</span>
+            </div>
+            <p style={{fontSize:11,color:C.textLt,margin:0}}>Exclues de tes révisions · clique pour désenfouir</p>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:0}}>
+            {buriedCards.map((card,i)=>{
+              const grp=GROUPS.find(g=>g.id===card.groupId);
+              const chName=getChapters(card.groupId,card.num)[card.chapterId-1];
+              return(
+                <div key={card.id} style={{display:"flex",alignItems:"center",padding:"10px 18px",gap:12,borderTop:i>0?`1px solid ${C.border}`:"none"}}>
+                  <div style={{width:3,background:pC(card.packetId),borderRadius:2,alignSelf:"stretch",flexShrink:0}}/>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:4}}>
+                      <Tag color={pC(card.packetId)} bg={pB(card.packetId)} small>{PACKETS.find(p=>p.id===card.packetId)?.label}</Tag>
+                      {grp&&<Tag color={C.textMed} bg={C.bg} small>{grp.label}</Tag>}
+                      <Tag color={C.textMed} bg={C.bg} small>Cours {card.num}</Tag>
+                      {chName&&<Tag color={C.textMed} bg={C.bg} small>Ch.{card.chapterId} {chName}</Tag>}
+                      {card.isUserCard&&<Tag color={"#7c3aed"} bg={"#f5f3ff"} small>✏️ Perso</Tag>}
+                    </div>
+                    {isOcclusion(card)?<p style={{fontFamily:serif,fontSize:12,color:C.textMed,margin:0}}>🖼 Image Occlusion</p>:<p style={{fontFamily:serif,fontSize:13,color:C.textMed,margin:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{card.front}</p>}
+                  </div>
+                  <button onClick={()=>onUnbury&&onUnbury(card.id)} style={{fontFamily:font,fontSize:11,fontWeight:600,padding:"6px 12px",cursor:"pointer",borderRadius:6,border:`1.5px solid ${C.good}`,background:C.goodBg,color:C.good,whiteSpace:"nowrap",flexShrink:0}}>👁 Désenfouir</button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       )}
     </div>
   );
@@ -1093,7 +1136,7 @@ function MyCardsTab({userCards,onNew,onEdit,onDelete,onToggleIntegration,progres
 }
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
-function Dashboard({currentUser,cards,userCards,progress,settings,onStudy,onGlobalStudy,onAdmin,onSettings,onLogout,onNewUserCard,onEditUserCard,onDeleteUserCard,onToggleIntegration,onStudyUser,paymentStatus,onClosePaymentBanner}){
+function Dashboard({currentUser,cards,userCards,progress,settings,onStudy,onGlobalStudy,onAdmin,onSettings,onLogout,onNewUserCard,onEditUserCard,onDeleteUserCard,onToggleIntegration,onStudyUser,onUnbury,allCards:allCardsProp,paymentStatus,onClosePaymentBanner}){
   const isAdmin=currentUser.role==="admin";
   const userGroups=currentUser.plan?.groups||[];
   const currentPlan=PLANS.find(p=>p.id===currentUser.plan?.planId);
@@ -1258,7 +1301,7 @@ function Dashboard({currentUser,cards,userCards,progress,settings,onStudy,onGlob
 
       {/* Tab content */}
       {activeTab==="stats"&&!isAdmin?(
-        <StatsTab username={currentUser.username}/>
+        <StatsTab username={currentUser.username} progress={progress} allCards={allCardsProp||[...cards,...(userCards||[]).filter(c=>c.integrated)]} onUnbury={onUnbury}/>
       ):activeTab==="mes-cartes"&&!isAdmin?(
         <MyCardsTab userCards={userCards||[]} onNew={onNewUserCard} onEdit={onEditUserCard} onDelete={onDeleteUserCard} onToggleIntegration={onToggleIntegration} progress={progress} onStudyUser={onStudyUser}/>
       ):activeTab==="shop"&&!isAdmin?(
@@ -1283,33 +1326,49 @@ function Dashboard({currentUser,cards,userCards,progress,settings,onStudy,onGlob
 }
 
 // ─── Study ────────────────────────────────────────────────────────────────────
-function StudyView({label,queue,onRate,onBack,settings,isAdmin}){
-  const [idx,setIdx]=useState(0),[showBack,setShowBack]=useState(false),[showOthers,setShowOthers]=useState(false),[localQ,setLocalQ]=useState(queue),[done,setDone]=useState(false),[stats,setStats]=useState({correct:0,total:0});
-  const cardStart=useRef(Date.now()); // Track time per card for stats
+function StudyView({label,queue,onRate,onBury,onBack,settings,isAdmin,progress}){
+  const [idx,setIdx]=useState(0),[showBack,setShowBack]=useState(false),[showOthers,setShowOthers]=useState(false),[localQ,setLocalQ]=useState(queue),[done,setDone]=useState(false),[stats,setStats]=useState({correct:0,total:0}),[buryFlash,setBuryFlash]=useState(false);
+  const cardStart=useRef(Date.now());
   const card=localQ[idx];
+
   const handleRate=async rating=>{
     const elapsed=Date.now()-cardStart.current;
     setStats(s=>({total:s.total+1,correct:s.correct+(rating>=3?1:0)}));
-    const np=await onRate(card,rating,elapsed); // Pass elapsed for stats
-    cardStart.current=Date.now(); // Reset timer for next card
+    const np=await onRate(card,rating,elapsed);
+    cardStart.current=Date.now();
     const q=[...localQ];
     if(np.state==="learning"||np.state==="relearning"){q.splice(idx,1);q.splice(Math.min(idx+4,q.length),0,card);}else q.splice(idx,1);
     setLocalQ(q);if(!q.length||idx>=q.length){setDone(true);return;}setShowBack(false);setShowOthers(false);
   };
+
+  const handleBury=()=>{
+    onBury&&onBury(card);
+    setBuryFlash(true);
+    setTimeout(()=>setBuryFlash(false),1500);
+    const q=[...localQ];q.splice(idx,1);
+    setLocalQ(q);if(!q.length||idx>=q.length){setDone(true);return;}setShowBack(false);setShowOthers(false);
+  };
+
   if(done||!card)return <div style={{fontFamily:font,background:C.bg,minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:12}}><div style={{fontSize:52}}>✓</div><p style={{fontFamily:serif,fontSize:26,margin:0}}>Session terminée</p><p style={{fontSize:14,color:C.textMed}}>{stats.correct}/{stats.total} · {stats.total>0?Math.round((stats.correct/stats.total)*100):0}%</p><Btn fill style={{marginTop:20}} onClick={onBack}>← Tableau de bord</Btn></div>;
+
   const col=pC(card.packetId),grp=GROUPS.find(g=>g.id===card.groupId);
   const chName=getChapters(card.groupId,card.num)[card.chapterId-1];
+  const cardProg=progress?.[card.id];
+  const isNewCard=!cardProg||cardProg.state==="new";
+
   return <div style={{fontFamily:font,background:C.bg,minHeight:"100vh",color:C.text}}>
-    <Nav left={<button onClick={onBack} style={{fontFamily:font,fontSize:13,background:"none",border:"none",cursor:"pointer",color:C.textMed}}>← Retour</button>} center={label} right={<span style={{fontSize:12,color:C.textLt}}>{idx+1} / {localQ.length}</span>}/>
+    <Nav left={<button onClick={onBack} style={{fontFamily:font,fontSize:13,background:"none",border:"none",cursor:"pointer",color:C.textMed}}>← Retour</button>} center={label} right={<div style={{display:"flex",alignItems:"center",gap:8}}><span style={{fontSize:12,color:C.textLt}}>{idx+1} / {localQ.length}</span><button onClick={handleBury} title="Enfouir cette carte (ne plus la réviser)" style={{fontFamily:font,fontSize:11,padding:"5px 10px",cursor:"pointer",borderRadius:5,border:`1px solid ${C.border}`,background:"transparent",color:C.textLt,display:"flex",alignItems:"center",gap:4}}>🙈 Enfouir</button></div>}/>
     <div style={{height:3,background:C.border}}><div style={{height:3,background:col,width:`${(idx/Math.max(1,localQ.length))*100}%`,transition:"width 0.3s"}}/></div>
+    {buryFlash&&<div style={{position:"fixed",bottom:24,right:24,zIndex:200,background:"#374151",color:"#fff",borderRadius:8,padding:"10px 18px",fontFamily:font,fontSize:13,fontWeight:600,boxShadow:"0 4px 16px rgba(0,0,0,0.2)",animation:"fadeIn 0.2s ease"}}>🙈 Carte enfouie — plus dans tes révisions</div>}
     <div style={{maxWidth:560,margin:"0 auto",padding:"28px 24px 0"}}>
-      <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:18}}>
+      <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:18,alignItems:"center"}}>
+        {isNewCard&&<span style={{fontFamily:mono,fontSize:9,letterSpacing:2,textTransform:"uppercase",padding:"3px 8px",borderRadius:3,background:"#fef2f2",color:"#dc2626",border:"1px solid #fca5a5",fontWeight:700}}>Nouveau</span>}
         <Tag color={col} bg={pB(card.packetId)}>{PACKETS.find(p=>p.id===card.packetId)?.label}</Tag>
         <Tag color={C.accent} bg={C.accentBg}>{grp?.label}</Tag>
         <Tag color={C.textMed} bg={C.bg}>Cours {card.num}</Tag>
         {chName&&<Tag color={C.textMed} bg={C.bg}>Ch.{card.chapterId} {chName}</Tag>}
         {card.isUserCard&&<Tag color={"#7c3aed"} bg={"#f5f3ff"}>✏️ Personnel</Tag>}
-        <Tag color={C.textLt} bg={C.bg}>{stateLabel(null)}</Tag>
+        <Tag color={C.textLt} bg={C.bg}>{stateLabel(cardProg)}</Tag>
       </div>
       {isOcclusion(card)?(
         <div style={{marginBottom:22}}>
@@ -1699,12 +1758,21 @@ function App(){
   const handleRate=useCallback(async(card,rating,elapsedMs=0)=>{
     const np=computeNext(prog[card.id],rating,settings);
     saveProg({...prog,[card.id]:np});
-    // Record study stat (not for admin)
-    if(currentUser&&currentUser.role!=="admin"){
-      recordStat(currentUser.username, rating>=3, elapsedMs);
-    }
+    if(currentUser&&currentUser.role!=="admin"){recordStat(currentUser.username,rating>=3,elapsedMs);}
     return np;
   },[prog,saveProg,settings,currentUser]);
+
+  const handleBury=useCallback((card)=>{
+    // Bury: set buried:true in progress — only affects this user's sessions
+    const existing=prog[card.id]||{};
+    saveProg({...prog,[card.id]:{...existing,buried:true}});
+  },[prog,saveProg]);
+
+  const handleUnbury=useCallback((cardId)=>{
+    const existing=prog[cardId]||{};
+    const {buried:_,...rest}=existing; // Remove buried flag
+    saveProg({...prog,[cardId]:rest});
+  },[prog,saveProg]);
 
   if(view==="loading") return <div style={{fontFamily:font,background:C.bg,minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16}}><p style={{fontFamily:serif,fontSize:28,letterSpacing:-0.5}}>MyFlashcard</p><p style={{color:C.textLt,fontSize:13}}>Chargement…</p></div>;
   if(view==="landing")   return <Landing onBack={()=>setView("login")} onRegister={()=>setView("register")}/>;
@@ -1712,8 +1780,8 @@ function App(){
   if(view==="register")  return <RegisterView onRegister={acc=>{handleRegister(acc);setView("dashboard");}} onBack={()=>setView("login")} accounts={accounts}/>;
   // User card editor: CardEditor in user mode (creates to user_cards table)
   if(userCardEditor!==null&&currentUser?.role!=="admin")return <CardEditor key={userCardKey} card={userCardEditor||null} onSave={handleSaveUserCard} onCancel={()=>setUserCardEditor(null)} userGroups={currentUser?.plan?.groups||[]}/>;
-  if(view==="dashboard"&&currentUser) return <Dashboard currentUser={currentUser} cards={cards} userCards={userCards} progress={prog} settings={settings} onStudy={startStudy} onGlobalStudy={startGlobalStudy} onAdmin={()=>setView("admin")} onSettings={()=>setView("settings")} onLogout={logout} onNewUserCard={()=>setUserCardEditor(false)} onEditUserCard={c=>setUserCardEditor(c)} onDeleteUserCard={handleDeleteUserCard} onToggleIntegration={handleToggleIntegration} onStudyUser={startUserCardStudy} paymentStatus={paymentStatus} onClosePaymentBanner={()=>setPaymentStatus(null)}/>;
-  if(view==="study"&&studyCtx) return <StudyView label={studyCtx.label} queue={studyCtx.queue} onRate={handleRate} onBack={()=>setView("dashboard")} settings={settings} isAdmin={currentUser?.role==="admin"}/>;
+  if(view==="dashboard"&&currentUser) return <Dashboard currentUser={currentUser} cards={cards} userCards={userCards} progress={prog} settings={settings} onStudy={startStudy} onGlobalStudy={startGlobalStudy} onAdmin={()=>setView("admin")} onSettings={()=>setView("settings")} onLogout={logout} onNewUserCard={()=>setUserCardEditor(false)} onEditUserCard={c=>setUserCardEditor(c)} onDeleteUserCard={handleDeleteUserCard} onToggleIntegration={handleToggleIntegration} onStudyUser={startUserCardStudy} onUnbury={handleUnbury} allCards={allCards} paymentStatus={paymentStatus} onClosePaymentBanner={()=>setPaymentStatus(null)}/>;
+  if(view==="study"&&studyCtx) return <StudyView label={studyCtx.label} queue={studyCtx.queue} onRate={handleRate} onBury={handleBury} onBack={()=>setView("dashboard")} settings={settings} isAdmin={currentUser?.role==="admin"} progress={prog}/>;
   if(view==="admin")     return <AdminView cards={cards} accounts={accounts} onSaveCard={handleSaveCard} onDeleteCard={handleDeleteCard} onSaveUser={handleSaveUser} onDeleteUser={handleDeleteUser} onBack={()=>setView("dashboard")}/>;
   if(view==="settings")  return <SettingsView settings={settings} onSave={saveSet} onBack={()=>setView("dashboard")}/>;
   return null;
